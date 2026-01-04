@@ -324,6 +324,9 @@ func (c *KubernetesCollector) buildCloudRoleEdges(builder *graph.Builder) {
 
 var _ Collector = (*KubernetesCollector)(nil)
 
+// These blank identifier assignments keep the k8s.io/api/* imports from
+// being flagged as unused by the compiler. The types are used implicitly
+// through client-go's return types and the graph.Builder methods.
 var (
 	_ = appsv1.Deployment{}
 	_ = batchv1.Job{}

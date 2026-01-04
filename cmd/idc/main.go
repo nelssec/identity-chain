@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/nelssec/identity-chain/pkg/analysis"
@@ -483,8 +484,6 @@ func truncate(s string, max int) string {
 }
 
 func identityCmd() *cobra.Command {
-	var showAzure bool
-	var showAWS bool
 	var azureWorkspaceID string
 
 	cmd := &cobra.Command{
@@ -637,26 +636,22 @@ Examples:
 		},
 	}
 
-	cmd.Flags().BoolVar(&showAzure, "azure", false, "Show Azure identity details")
-	cmd.Flags().BoolVar(&showAWS, "aws", false, "Show AWS identity details")
 	cmd.Flags().StringVar(&azureWorkspaceID, "azure-workspace", "", "Azure Log Analytics workspace ID for usage data")
 
 	return cmd
 }
 
 func detectCloudProvider(identity string) string {
+	// Azure client ID is a UUID format
 	if len(identity) == 36 && identity[8] == '-' && identity[13] == '-' {
 		return "Azure"
 	}
-	if len(identity) > 12 && identity[:4] == "arn:" {
+	// AWS ARN format
+	if strings.HasPrefix(identity, "arn:") {
 		return "AWS"
 	}
-	if len(identity) > 0 && (identity[len(identity)-19:] == ".iam.gserviceaccount" ||
-		(len(identity) > 30 && identity[len(identity)-30:] == ".iam.gserviceaccount.com")) {
-		return "GCP"
-	}
-	if len(identity) > 20 && (identity[len(identity)-20:] == "iam.gserviceaccount.com" ||
-		len(identity) > 4 && identity[len(identity)-4:] == ".com") {
+	// GCP service account email format
+	if strings.HasSuffix(identity, ".iam.gserviceaccount.com") {
 		return "GCP"
 	}
 	return "Unknown"
@@ -664,47 +659,13 @@ func detectCloudProvider(identity string) string {
 
 func truncateScope(scope string) string {
 	if len(scope) > 80 {
-		parts := make([]string, 0)
-		for i, p := range splitScope(scope) {
-			if i > 2 {
-				parts = append(parts, "...")
-				break
-			}
-			parts = append(parts, p)
+		parts := strings.Split(scope, "/")
+		if len(parts) > 3 {
+			parts = append(parts[:3], "...")
 		}
-		return joinScope(parts)
+		return strings.Join(parts, "/")
 	}
 	return scope
-}
-
-func splitScope(scope string) []string {
-	var parts []string
-	current := ""
-	for _, c := range scope {
-		if c == '/' {
-			if current != "" {
-				parts = append(parts, current)
-			}
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
-}
-
-func joinScope(parts []string) string {
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += "/"
-		}
-		result += p
-	}
-	return result
 }
 
 func truncateActions(actions []string, max int) []string {

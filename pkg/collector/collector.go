@@ -18,14 +18,6 @@ type Options struct {
 	KubeContext    string
 }
 
-func DefaultOptions() Options {
-	return Options{
-		Namespace:     "default",
-		AllNamespaces: false,
-		IncludeSystem: false,
-	}
-}
-
 func (o Options) ShouldIncludeNamespace(ns string) bool {
 	if o.AllNamespaces {
 		if !o.IncludeSystem && isSystemNamespace(ns) {

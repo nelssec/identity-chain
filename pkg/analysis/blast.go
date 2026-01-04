@@ -2,9 +2,27 @@ package analysis
 
 import (
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/nelssec/identity-chain/pkg/graph"
 )
+
+// severityRank provides consistent ordering for severity levels (lower = more severe)
+var severityRank = map[graph.Severity]int{
+	graph.SeverityCritical: 0,
+	graph.SeverityHigh:     1,
+	graph.SeverityMedium:   2,
+	graph.SeverityLow:      3,
+}
+
+// severityValue provides reverse ordering (higher = more severe) for comparison
+var severityValue = map[graph.Severity]int{
+	graph.SeverityLow:      0,
+	graph.SeverityMedium:   1,
+	graph.SeverityHigh:     2,
+	graph.SeverityCritical: 3,
+}
 
 type BlastResult struct {
 	SourceWorkload  *graph.Node
@@ -271,13 +289,7 @@ func BlastRadiusFromSA(g *graph.Graph, saNamespace, saName string) (*BlastResult
 }
 
 func updateMaxSeverity(r *BlastResult, s graph.Severity) {
-	severityOrder := map[graph.Severity]int{
-		graph.SeverityLow:      0,
-		graph.SeverityMedium:   1,
-		graph.SeverityHigh:     2,
-		graph.SeverityCritical: 3,
-	}
-	if severityOrder[s] > severityOrder[r.MaxSeverity] {
+	if severityValue[s] > severityValue[r.MaxSeverity] {
 		r.MaxSeverity = s
 	}
 }
@@ -341,23 +353,14 @@ func describeActualPolicyImpact(policyName string, actions []string, resources [
 	if len(descriptions) == 1 {
 		return descriptions[0]
 	}
-	return descriptions[0] + " (+" + formatInt(len(descriptions)-1) + " more services)"
+	return descriptions[0] + " (+" + strconv.Itoa(len(descriptions)-1) + " more services)"
 }
 
 func splitAction(action string) []string {
-	for i := 0; i < len(action); i++ {
-		if action[i] == ':' {
-			return []string{action[:i], action[i+1:]}
-		}
+	if idx := strings.Index(action, ":"); idx >= 0 {
+		return []string{action[:idx], action[idx+1:]}
 	}
 	return []string{action}
-}
-
-func formatInt(n int) string {
-	if n < 10 {
-		return string('0' + byte(n))
-	}
-	return formatInt(n/10) + string('0'+byte(n%10))
 }
 
 func describeResourceScope(resources []string) string {
@@ -378,8 +381,8 @@ func describeResourceScope(resources []string) string {
 	}
 
 	for _, r := range resources {
-		if len(r) > 4 && r[:4] == "arn:" {
-			parts := splitARN(r)
+		if strings.HasPrefix(r, "arn:") {
+			parts := strings.Split(r, ":")
 			if len(parts) >= 6 {
 				service := parts[2]
 				resource := parts[5]
@@ -394,24 +397,7 @@ func describeResourceScope(resources []string) string {
 	if len(resources) == 1 {
 		return resources[0]
 	}
-	return formatInt(len(resources)) + " specific resources"
-}
-
-func splitARN(arn string) []string {
-	var parts []string
-	current := ""
-	for _, c := range arn {
-		if c == ':' {
-			parts = append(parts, current)
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
+	return strconv.Itoa(len(resources)) + " specific resources"
 }
 
 func describeServiceName(service string) string {
@@ -480,92 +466,78 @@ func describeServiceAccess(service string, verbs []string, resources []string) s
 
 func joinVerbs(verbs []string, max int) string {
 	if len(verbs) <= max {
-		result := ""
-		for i, v := range verbs {
-			if i > 0 {
-				result += ", "
-			}
-			result += v
-		}
-		return result
+		return strings.Join(verbs, ", ")
 	}
-	result := ""
-	for i := 0; i < max; i++ {
-		if i > 0 {
-			result += ", "
-		}
-		result += verbs[i]
-	}
-	return result + ", ..."
+	return strings.Join(verbs[:max], ", ") + ", ..."
 }
 
 func describePolicyImpact(policyName string) string {
-	policyLower := toLower(policyName)
+	policyLower := strings.ToLower(policyName)
 
-	if contains(policyLower, "admin") {
+	if strings.Contains(policyLower, "admin") {
 		return "FULL ADMIN access to AWS account"
 	}
-	if contains(policyLower, "s3") {
-		if contains(policyLower, "fullaccess") || contains(policyLower, "full") {
+	if strings.Contains(policyLower, "s3") {
+		if strings.Contains(policyLower, "fullaccess") || strings.Contains(policyLower, "full") {
 			return "Read/Write access to ALL S3 buckets in the account"
 		}
-		if contains(policyLower, "readonly") || contains(policyLower, "read") {
+		if strings.Contains(policyLower, "readonly") || strings.Contains(policyLower, "read") {
 			return "Read access to ALL S3 buckets in the account"
 		}
 		return "Access to S3 storage"
 	}
-	if contains(policyLower, "secretsmanager") || contains(policyLower, "secrets") {
-		if contains(policyLower, "readwrite") || contains(policyLower, "full") {
+	if strings.Contains(policyLower, "secretsmanager") || strings.Contains(policyLower, "secrets") {
+		if strings.Contains(policyLower, "readwrite") || strings.Contains(policyLower, "full") {
 			return "Read/Write access to ALL secrets in Secrets Manager"
 		}
-		if contains(policyLower, "readonly") || contains(policyLower, "read") {
+		if strings.Contains(policyLower, "readonly") || strings.Contains(policyLower, "read") {
 			return "Read access to ALL secrets in Secrets Manager"
 		}
 		return "Access to Secrets Manager"
 	}
-	if contains(policyLower, "ec2") {
-		if contains(policyLower, "fullaccess") || contains(policyLower, "full") {
+	if strings.Contains(policyLower, "ec2") {
+		if strings.Contains(policyLower, "fullaccess") || strings.Contains(policyLower, "full") {
 			return "FULL access to EC2 instances - can launch, terminate, modify"
 		}
-		if contains(policyLower, "readonly") || contains(policyLower, "read") {
+		if strings.Contains(policyLower, "readonly") || strings.Contains(policyLower, "read") {
 			return "Read access to EC2 instances"
 		}
 		return "Access to EC2 compute"
 	}
-	if contains(policyLower, "iam") {
-		if contains(policyLower, "fullaccess") || contains(policyLower, "full") {
+	if strings.Contains(policyLower, "iam") {
+		if strings.Contains(policyLower, "fullaccess") || strings.Contains(policyLower, "full") {
 			return "FULL IAM access - can create roles, policies, users (CRITICAL)"
 		}
-		if contains(policyLower, "readonly") || contains(policyLower, "read") {
+		if strings.Contains(policyLower, "readonly") || strings.Contains(policyLower, "read") {
 			return "Read access to IAM configuration"
 		}
 		return "Access to IAM"
 	}
-	if contains(policyLower, "rds") || contains(policyLower, "database") {
+	if strings.Contains(policyLower, "rds") || strings.Contains(policyLower, "database") {
 		return "Access to RDS databases"
 	}
-	if contains(policyLower, "dynamodb") {
+	if strings.Contains(policyLower, "dynamodb") {
 		return "Access to DynamoDB tables"
 	}
-	if contains(policyLower, "lambda") {
+	if strings.Contains(policyLower, "lambda") {
 		return "Access to Lambda functions"
 	}
-	if contains(policyLower, "kms") {
+	if strings.Contains(policyLower, "kms") {
 		return "Access to KMS encryption keys"
 	}
-	if contains(policyLower, "sqs") {
+	if strings.Contains(policyLower, "sqs") {
 		return "Access to SQS message queues"
 	}
-	if contains(policyLower, "sns") {
+	if strings.Contains(policyLower, "sns") {
 		return "Access to SNS notifications"
 	}
-	if contains(policyLower, "cloudwatch") {
+	if strings.Contains(policyLower, "cloudwatch") {
 		return "Access to CloudWatch monitoring"
 	}
-	if contains(policyLower, "eks") || contains(policyLower, "kubernetes") {
+	if strings.Contains(policyLower, "eks") || strings.Contains(policyLower, "kubernetes") {
 		return "Access to EKS/Kubernetes resources"
 	}
-	if contains(policyLower, "ssm") {
+	if strings.Contains(policyLower, "ssm") {
 		return "Access to Systems Manager and parameters"
 	}
 
@@ -574,18 +546,18 @@ func describePolicyImpact(policyName string) string {
 
 func inferBlastRadiusFromRoleName(roleName, provider string) []string {
 	var impacts []string
-	roleLower := toLower(roleName)
+	roleLower := strings.ToLower(roleName)
 
-	if contains(roleLower, "admin") {
+	if strings.Contains(roleLower, "admin") {
 		impacts = append(impacts, "Potential admin-level access (check policies)")
 	}
-	if contains(roleLower, "s3") {
+	if strings.Contains(roleLower, "s3") {
 		impacts = append(impacts, "Likely access to S3 storage")
 	}
-	if contains(roleLower, "secret") {
+	if strings.Contains(roleLower, "secret") {
 		impacts = append(impacts, "Likely access to secrets/credentials")
 	}
-	if contains(roleLower, "database") || contains(roleLower, "rds") || contains(roleLower, "db") {
+	if strings.Contains(roleLower, "database") || strings.Contains(roleLower, "rds") || strings.Contains(roleLower, "db") {
 		impacts = append(impacts, "Likely access to databases")
 	}
 
@@ -594,31 +566,6 @@ func inferBlastRadiusFromRoleName(roleName, provider string) []string {
 	}
 
 	return impacts
-}
-
-func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			result[i] = c + 32
-		} else {
-			result[i] = c
-		}
-	}
-	return string(result)
-}
-
-func contains(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func describeCloudAccess(provider, resourceType string, actions []string) string {
@@ -678,48 +625,29 @@ func describeCloudAccess(provider, resourceType string, actions []string) string
 
 func containsAny(s string, substrs ...string) bool {
 	for _, sub := range substrs {
-		if len(s) >= len(sub) {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
+		if strings.Contains(s, sub) {
+			return true
 		}
 	}
 	return false
 }
 
+// shortARN extracts the last segment from an ARN or path-like string
 func shortARN(arn string) string {
-	parts := make([]string, 0)
-	current := ""
-	for _, c := range arn {
-		if c == '/' || c == ':' {
-			if current != "" {
-				parts = append(parts, current)
-			}
-			current = ""
-		} else {
-			current += string(c)
-		}
+	// Try splitting by / first (common for role ARNs)
+	if idx := strings.LastIndex(arn, "/"); idx >= 0 {
+		return arn[idx+1:]
 	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
+	// Fall back to splitting by :
+	if idx := strings.LastIndex(arn, ":"); idx >= 0 {
+		return arn[idx+1:]
 	}
 	return arn
 }
 
 func sortResourcesBySeverity(resources []ResourceAccess) {
-	severityOrder := map[graph.Severity]int{
-		graph.SeverityCritical: 0,
-		graph.SeverityHigh:     1,
-		graph.SeverityMedium:   2,
-		graph.SeverityLow:      3,
-	}
 	sort.Slice(resources, func(i, j int) bool {
-		return severityOrder[resources[i].Severity] < severityOrder[resources[j].Severity]
+		return severityRank[resources[i].Severity] < severityRank[resources[j].Severity]
 	})
 }
 
@@ -738,13 +666,7 @@ func AllWorkloadBlastRadius(g *graph.Graph) ([]*BlastResult, error) {
 	}
 
 	sort.Slice(results, func(i, j int) bool {
-		severityOrder := map[graph.Severity]int{
-			graph.SeverityCritical: 0,
-			graph.SeverityHigh:     1,
-			graph.SeverityMedium:   2,
-			graph.SeverityLow:      3,
-		}
-		return severityOrder[results[i].MaxSeverity] < severityOrder[results[j].MaxSeverity]
+		return severityRank[results[i].MaxSeverity] < severityRank[results[j].MaxSeverity]
 	})
 
 	return results, nil
@@ -779,14 +701,8 @@ func AnalyzeAllServiceAccounts(g *graph.Graph) ([]*SAAnalysis, error) {
 	}
 
 	sort.Slice(results, func(i, j int) bool {
-		severityOrder := map[graph.Severity]int{
-			graph.SeverityCritical: 0,
-			graph.SeverityHigh:     1,
-			graph.SeverityMedium:   2,
-			graph.SeverityLow:      3,
-		}
-		if severityOrder[results[i].MaxSeverity] != severityOrder[results[j].MaxSeverity] {
-			return severityOrder[results[i].MaxSeverity] < severityOrder[results[j].MaxSeverity]
+		if severityRank[results[i].MaxSeverity] != severityRank[results[j].MaxSeverity] {
+			return severityRank[results[i].MaxSeverity] < severityRank[results[j].MaxSeverity]
 		}
 		return results[i].TotalPermissions > results[j].TotalPermissions
 	})
@@ -950,13 +866,7 @@ func AnalyzeServiceAccount(g *graph.Graph, sa *graph.Node) *SAAnalysis {
 }
 
 func updateSAMaxSeverity(a *SAAnalysis, s graph.Severity) {
-	severityOrder := map[graph.Severity]int{
-		graph.SeverityLow:      0,
-		graph.SeverityMedium:   1,
-		graph.SeverityHigh:     2,
-		graph.SeverityCritical: 3,
-	}
-	if severityOrder[s] > severityOrder[a.MaxSeverity] {
+	if severityValue[s] > severityValue[a.MaxSeverity] {
 		a.MaxSeverity = s
 	}
 }
