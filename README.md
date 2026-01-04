@@ -250,6 +250,32 @@ idc graph -A -o dot > cluster.dot            # Graphviz format
 dot -Tpng cluster.dot -o cluster.png
 ```
 
+### `idc scan` - Cluster Statistics
+
+```bash
+idc scan -A                                  # Show cluster identity stats
+```
+
+### `idc identity` - Cloud Identity Bindings
+
+```bash
+idc identity -A                              # Show SAs with cloud bindings
+idc identity -A --include-cloud --aws-region us-west-2
+```
+
+### `idc privesc` - Privilege Escalation Detection
+
+```bash
+idc privesc --all -A                         # Find privesc paths
+idc privesc --workload deploy/api -n prod
+```
+
+### `idc unused` - Find Unused Permissions
+
+```bash
+idc unused -A                                # Find overprivileged SAs
+```
+
 ## Architecture
 
 ```mermaid
