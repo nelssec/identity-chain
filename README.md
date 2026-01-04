@@ -126,6 +126,120 @@ Show identity chain statistics for the cluster.
 idc scan -A
 ```
 
+### `idc privesc` - Privilege Escalation Detection
+
+Find privilege escalation paths in RBAC configurations.
+
+```bash
+# Scan all workloads for privesc paths
+idc privesc --all -A
+
+# Check specific workload
+idc privesc --workload deployment/api-server -n prod
+
+# Output as JSON
+idc privesc --all -A -o json
+```
+
+**Detected vectors:**
+- `bind_roles` - Can create/modify RoleBindings
+- `escalate_verb` - Has escalate permission on roles
+- `impersonate` - Can impersonate users/groups/service accounts
+- `create_pods` - Can create pods (mount secrets, use other SAs)
+- `create_workloads` - Can create deployments/daemonsets/etc.
+- `csr_approval` - Can approve certificate signing requests
+- `node_proxy` - Can access node proxy API
+- `secrets_access` - Can read secrets cluster-wide
+- `webhook_modify` - Can modify admission webhooks
+- `token_request` - Can request service account tokens
+
+### `idc whocan` - Reverse RBAC Lookup
+
+Find all subjects that can perform a specific action.
+
+```bash
+# Who can get secrets?
+idc whocan get secrets -A
+
+# Who can create pods in production?
+idc whocan create pods -n production
+
+# Who can delete deployments?
+idc whocan delete deployments -A
+
+# Output as JSON
+idc whocan get secrets -A -o json
+```
+
+### `idc whatcan` - Forward RBAC Lookup
+
+Show all permissions for a specific service account.
+
+```bash
+# What can this service account do?
+idc whatcan my-service-account -n default
+
+# Output as JSON
+idc whatcan my-service-account -n default -o json
+```
+
+### `idc rbac-audit` - RBAC Security Audit
+
+Run comprehensive RBAC security checks.
+
+```bash
+# Run all checks
+idc rbac-audit -A
+
+# Run specific checks only
+idc rbac-audit -A --checks RBAC003,RBAC005
+
+# Skip specific checks
+idc rbac-audit -A --skip-checks RBAC001,RBAC002
+
+# Output as JSON
+idc rbac-audit -A -o json
+```
+
+**Security checks (15 total):**
+
+| ID | Name | Severity |
+|----|------|----------|
+| RBAC001 | Default ServiceAccount Usage | Medium |
+| RBAC002 | Automounted SA Tokens | Low |
+| RBAC003 | Wildcard Permissions | Critical |
+| RBAC004 | cluster-admin Usage | Critical |
+| RBAC005 | Secrets Access | High |
+| RBAC006 | Pod Exec Access | High |
+| RBAC007 | Bind/Escalate Permissions | Critical |
+| RBAC008 | Impersonation Permissions | Critical |
+| RBAC009 | Cross-Namespace Bindings | Medium |
+| RBAC010 | Unused ServiceAccounts | Low |
+| RBAC011 | Node/Proxy Access | High |
+| RBAC012 | CSR Permissions | High |
+| RBAC013 | Webhook Modification | Critical |
+| RBAC014 | Workload Creation | Medium |
+| RBAC015 | Dangerous Verbs | High |
+
+### `idc cloud-audit` - Cloud IAM Security Audit
+
+Analyze cloud IAM configurations for security issues.
+
+```bash
+# Audit cloud IAM (requires --include-cloud)
+idc cloud-audit -A --include-cloud --aws-region us-west-2
+
+# Output as JSON
+idc cloud-audit -A --include-cloud --aws-region us-west-2 -o json
+```
+
+**Detected issues:**
+- Admin policy attachments (AdministratorAccess, PowerUserAccess)
+- IAM privilege escalation paths (iam:*, iam:CreateRole, etc.)
+- Cross-account access via trust policies
+- Overly permissive policies (service:* wildcards)
+- Sensitive data access (s3:*, secretsmanager:*, etc.)
+
 ### `idc unused` - Find Unused Permissions
 
 Analyze audit logs to find permissions granted but never used.
