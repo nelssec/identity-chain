@@ -491,3 +491,118 @@ func (d *DOTWriter) WriteCloudAuditResult(result *analysis.CloudIAMAuditResult) 
 	fmt.Fprintln(d.w, "}")
 	return nil
 }
+
+func (d *DOTWriter) WritePodSecurityResult(result *analysis.PodSecurityResult) error {
+	fmt.Fprintln(d.w, "digraph PodSecurityAudit {")
+	fmt.Fprintln(d.w, "  rankdir=TB;")
+	fmt.Fprintln(d.w, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(d.w)
+
+	fmt.Fprintf(d.w, "  \"summary\" [label=\"Pod Security Audit\\nChecks: %d\\nFindings: %d\", shape=note, fillcolor=\"#f5f5f5\"];\n",
+		len(result.ChecksRun), result.TotalFindings)
+
+	for i, f := range result.Findings {
+		findingID := fmt.Sprintf("finding_%d", i)
+		label := fmt.Sprintf("[%s] %s\\n%d affected", f.CheckID, f.Title, len(f.Affected))
+		fillColor, borderColor := severityColors(f.Severity)
+		fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\"];\n",
+			findingID, label, fillColor, borderColor)
+	}
+
+	fmt.Fprintln(d.w, "}")
+	return nil
+}
+
+func (d *DOTWriter) WriteNetworkPolicyResult(result *analysis.NetworkPolicyResult) error {
+	fmt.Fprintln(d.w, "digraph NetworkPolicyAudit {")
+	fmt.Fprintln(d.w, "  rankdir=TB;")
+	fmt.Fprintln(d.w, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(d.w)
+
+	fmt.Fprintf(d.w, "  \"summary\" [label=\"Network Policy Audit\\nPolicies: %d\\nFindings: %d\", shape=note, fillcolor=\"#f5f5f5\"];\n",
+		result.Summary.TotalNetworkPolicies, result.TotalFindings)
+
+	for i, f := range result.Findings {
+		findingID := fmt.Sprintf("finding_%d", i)
+		label := fmt.Sprintf("[%s] %s\\n%d affected", f.CheckID, f.Title, len(f.Affected))
+		fillColor, borderColor := severityColors(f.Severity)
+		fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\"];\n",
+			findingID, label, fillColor, borderColor)
+	}
+
+	fmt.Fprintln(d.w, "}")
+	return nil
+}
+
+func (d *DOTWriter) WriteAttackPathResults(results []*analysis.AttackPathResult) error {
+	fmt.Fprintln(d.w, "digraph AttackPaths {")
+	fmt.Fprintln(d.w, "  rankdir=LR;")
+	fmt.Fprintln(d.w, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(d.w, "  edge [fontname=\"Helvetica\", fontsize=9];")
+	fmt.Fprintln(d.w, "  compound=true;")
+	fmt.Fprintln(d.w)
+
+	// Summary node
+	summary := analysis.SummarizeAttackPaths(results)
+	fmt.Fprintf(d.w, "  \"summary\" [label=\"Attack Paths\\nWorkloads: %d\\nPaths: %d\\nCritical: %d\", shape=note, fillcolor=\"#f5f5f5\"];\n",
+		summary.WorkloadsWithPaths, summary.TotalPaths, summary.CriticalPaths)
+	fmt.Fprintln(d.w)
+
+	pathCounter := 0
+	for _, r := range results {
+		if r.SourceWorkload == nil || len(r.Paths) == 0 {
+			continue
+		}
+
+		// Workload node
+		workloadID := r.SourceWorkload.ID
+		label := fmt.Sprintf("%s\\n%s/%s", r.SourceWorkload.Metadata.WorkloadKind, r.SourceWorkload.Namespace, r.SourceWorkload.Name)
+		fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"#e3f2fd\", color=\"#1976d2\"];\n", workloadID, label)
+
+		for _, path := range r.Paths {
+			pathCounter++
+			pathCluster := fmt.Sprintf("cluster_path_%d", pathCounter)
+
+			// Create subgraph for each path
+			fmt.Fprintf(d.w, "  subgraph %s {\n", pathCluster)
+			fmt.Fprintf(d.w, "    label=\"%s\";\n", path.Name)
+			fmt.Fprintf(d.w, "    style=dashed;\n")
+
+			prevNodeID := workloadID
+			for i, step := range path.Steps {
+				stepID := fmt.Sprintf("step_%d_%d", pathCounter, i)
+				stepLabel := fmt.Sprintf("Step %d\\n%s", step.StepNumber, step.Action)
+				fillColor, borderColor := severityColors(step.Severity)
+				fmt.Fprintf(d.w, "    \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\"];\n",
+					stepID, stepLabel, fillColor, borderColor)
+
+				if i > 0 {
+					edgeColor := severityEdgeColor(step.Severity)
+					fmt.Fprintf(d.w, "    \"%s\" -> \"%s\" [color=\"%s\", penwidth=2];\n",
+						prevNodeID, stepID, edgeColor)
+				}
+				prevNodeID = stepID
+			}
+
+			// Objective node
+			objectiveID := fmt.Sprintf("objective_%d", pathCounter)
+			objFillColor, objBorderColor := severityColors(path.MaxSeverity)
+			fmt.Fprintf(d.w, "    \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\", shape=octagon];\n",
+				objectiveID, path.Objective, objFillColor, objBorderColor)
+			fmt.Fprintf(d.w, "    \"%s\" -> \"%s\" [color=\"%s\", penwidth=2, style=dashed];\n",
+				prevNodeID, objectiveID, severityEdgeColor(path.MaxSeverity))
+
+			fmt.Fprintln(d.w, "  }")
+
+			// Connect workload to first step
+			if len(path.Steps) > 0 {
+				firstStepID := fmt.Sprintf("step_%d_0", pathCounter)
+				fmt.Fprintf(d.w, "  \"%s\" -> \"%s\" [color=\"#666666\"];\n", workloadID, firstStepID)
+			}
+		}
+		fmt.Fprintln(d.w)
+	}
+
+	fmt.Fprintln(d.w, "}")
+	return nil
+}

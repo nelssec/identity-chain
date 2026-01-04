@@ -67,6 +67,25 @@ func (j *JSONWriter) WriteCloudAuditResult(result *analysis.CloudIAMAuditResult)
 	return j.encoder.Encode(result)
 }
 
+func (j *JSONWriter) WritePodSecurityResult(result *analysis.PodSecurityResult) error {
+	return j.encoder.Encode(result)
+}
+
+func (j *JSONWriter) WriteNetworkPolicyResult(result *analysis.NetworkPolicyResult) error {
+	return j.encoder.Encode(result)
+}
+
+func (j *JSONWriter) WriteAttackPathResults(results []*analysis.AttackPathResult) error {
+	output := struct {
+		Results []*analysis.AttackPathResult `json:"results"`
+		Summary *analysis.AttackPathSummary  `json:"summary"`
+	}{
+		Results: results,
+		Summary: analysis.SummarizeAttackPaths(results),
+	}
+	return j.encoder.Encode(output)
+}
+
 type blastResultJSON struct {
 	Workload        *nodeRef          `json:"workload,omitempty"`
 	ServiceAccount  *nodeRef          `json:"service_account,omitempty"`

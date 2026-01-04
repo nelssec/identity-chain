@@ -64,6 +64,9 @@ Examples:
 	rootCmd.AddCommand(whatcanCmd())
 	rootCmd.AddCommand(rbacAuditCmd())
 	rootCmd.AddCommand(cloudAuditCmd())
+	rootCmd.AddCommand(podSecurityCmd())
+	rootCmd.AddCommand(networkPolicyCmd())
+	rootCmd.AddCommand(attackPathCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -963,6 +966,203 @@ Examples:
 			return writer.WriteCloudAuditResult(result)
 		},
 	}
+
+	return cmd
+}
+
+func podSecurityCmd() *cobra.Command {
+	var checks string
+	var skipChecks string
+
+	cmd := &cobra.Command{
+		Use:   "pod-security",
+		Short: "Run pod security audit",
+		Long: `Analyze workload configurations for security issues such as privileged containers,
+host access, dangerous capabilities, and missing security context.
+
+Checks for Pod Security Standards (PSS) violations and common misconfigurations.
+
+Examples:
+  idc pod-security -A
+  idc pod-security -n prod
+  idc pod-security -A --checks PSS001,PSS002
+  idc pod-security -A --skip-checks PSS010`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.PodSecurityOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			if checks != "" {
+				opts.ChecksToRun = strings.Split(checks, ",")
+			}
+			if skipChecks != "" {
+				opts.SkipChecks = strings.Split(skipChecks, ",")
+			}
+
+			result := analysis.RunPodSecurityAudit(g, opts)
+
+			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			return writer.WritePodSecurityResult(result)
+		},
+	}
+
+	cmd.Flags().StringVar(&checks, "checks", "", "Comma-separated list of checks to run (e.g., PSS001,PSS002)")
+	cmd.Flags().StringVar(&skipChecks, "skip-checks", "", "Comma-separated list of checks to skip")
+
+	return cmd
+}
+
+func networkPolicyCmd() *cobra.Command {
+	var checks string
+	var skipChecks string
+
+	cmd := &cobra.Command{
+		Use:   "network-policy",
+		Short: "Run network policy audit",
+		Long: `Analyze network policies for security issues such as missing policies,
+externally exposed workloads, and overly permissive rules.
+
+Examples:
+  idc network-policy -A
+  idc network-policy -n prod
+  idc network-policy -A --checks NET001,NET002
+  idc network-policy -A --skip-checks NET007`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.NetworkPolicyOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			if checks != "" {
+				opts.ChecksToRun = strings.Split(checks, ",")
+			}
+			if skipChecks != "" {
+				opts.SkipChecks = strings.Split(skipChecks, ",")
+			}
+
+			result := analysis.RunNetworkPolicyAudit(g, opts)
+
+			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			return writer.WriteNetworkPolicyResult(result)
+		},
+	}
+
+	cmd.Flags().StringVar(&checks, "checks", "", "Comma-separated list of checks to run (e.g., NET001,NET002)")
+	cmd.Flags().StringVar(&skipChecks, "skip-checks", "", "Comma-separated list of checks to skip")
+
+	return cmd
+}
+
+func attackPathCmd() *cobra.Command {
+	var workload string
+	var all bool
+	var maxDepth int
+
+	cmd := &cobra.Command{
+		Use:   "attack-path",
+		Short: "Visualize attack paths from workloads",
+		Long: `Analyze and visualize potential attack paths from compromised workloads.
+Traces paths through RBAC, secrets access, pod creation, and cloud IAM.
+
+Each attack path shows step-by-step techniques an attacker could use,
+with MITRE ATT&CK references and mitigation recommendations.
+
+Examples:
+  idc attack-path --all -A
+  idc attack-path --workload deployment/api-server -n prod
+  idc attack-path --all -A --include-cloud --aws-region us-west-2
+  idc attack-path --all -A -o json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.AttackPathOptions{
+				MaxDepth:       maxDepth,
+				IncludeCloud:   includeCloud,
+				IncludePrivesc: true,
+				Namespace:      namespace,
+			}
+
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+
+			if all {
+				results, err := analysis.FindAllAttackPaths(g, opts)
+				if err != nil {
+					return fmt.Errorf("attack path analysis failed: %w", err)
+				}
+				return writer.WriteAttackPathResults(results)
+			}
+
+			if workload == "" {
+				return fmt.Errorf("--workload or --all is required")
+			}
+
+			kind, ns, name := graph.ParseWorkloadRef(workload, namespace)
+			nodeID := graph.GenerateNodeID(graph.NodeWorkload, ns, name)
+
+			node := g.GetNode(nodeID)
+			if node == nil {
+				nodes := g.GetNodesByNamespace(ns)
+				for _, n := range nodes {
+					if n.Type == graph.NodeWorkload && n.Name == name {
+						if kind == "" || n.Metadata.WorkloadKind == kind {
+							nodeID = n.ID
+							break
+						}
+					}
+				}
+			}
+
+			result, err := analysis.FindAttackPaths(g, nodeID, opts)
+			if err != nil {
+				return fmt.Errorf("attack path analysis failed: %w", err)
+			}
+
+			if result == nil {
+				return fmt.Errorf("workload not found: %s", workload)
+			}
+
+			return writer.WriteAttackPathResults([]*analysis.AttackPathResult{result})
+		},
+	}
+
+	cmd.Flags().StringVarP(&workload, "workload", "w", "", "Workload to analyze")
+	cmd.Flags().BoolVar(&all, "all", false, "Analyze all workloads")
+	cmd.Flags().IntVar(&maxDepth, "depth", 5, "Maximum path depth to search")
 
 	return cmd
 }

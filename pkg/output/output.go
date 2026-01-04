@@ -26,6 +26,9 @@ type Writer interface {
 	WriteWhatCanResult(result *analysis.ReverseRBACResult) error
 	WriteRBACAuditResult(result *analysis.RBACAuditResult) error
 	WriteCloudAuditResult(result *analysis.CloudIAMAuditResult) error
+	WritePodSecurityResult(result *analysis.PodSecurityResult) error
+	WriteNetworkPolicyResult(result *analysis.NetworkPolicyResult) error
+	WriteAttackPathResults(results []*analysis.AttackPathResult) error
 }
 
 func NewWriter(w io.Writer, format Format) Writer {

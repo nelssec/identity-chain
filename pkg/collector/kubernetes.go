@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -161,6 +162,14 @@ func (c *KubernetesCollector) collectNamespacedResources(ctx context.Context, bu
 		return err
 	}
 
+	if err := c.collectNetworkPolicies(ctx, builder, namespace); err != nil {
+		return err
+	}
+
+	if err := c.collectServices(ctx, builder, namespace); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -306,6 +315,30 @@ func (c *KubernetesCollector) collectPods(ctx context.Context, builder *graph.Bu
 	return nil
 }
 
+func (c *KubernetesCollector) collectNetworkPolicies(ctx context.Context, builder *graph.Builder, namespace string) error {
+	nps, err := c.client.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	for i := range nps.Items {
+		_ = builder.AddNetworkPolicy(&nps.Items[i])
+	}
+	return nil
+}
+
+func (c *KubernetesCollector) collectServices(ctx context.Context, builder *graph.Builder, namespace string) error {
+	svcs, err := c.client.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	for i := range svcs.Items {
+		_ = builder.AddService(&svcs.Items[i])
+	}
+	return nil
+}
+
 func (c *KubernetesCollector) buildCloudRoleEdges(builder *graph.Builder) {
 	sas := builder.Build().GetNodesByType(graph.NodeServiceAccount)
 
@@ -331,5 +364,6 @@ var (
 	_ = appsv1.Deployment{}
 	_ = batchv1.Job{}
 	_ = corev1.Pod{}
+	_ = networkingv1.NetworkPolicy{}
 	_ = rbacv1.Role{}
 )

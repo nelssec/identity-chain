@@ -425,3 +425,233 @@ func truncateString(s string, max int) string {
 	}
 	return s[:max-2] + ".."
 }
+
+func (t *TableWriter) WritePodSecurityResult(result *analysis.PodSecurityResult) error {
+	fmt.Fprintf(t.w, "=== Pod Security Audit ===\n\n")
+	fmt.Fprintf(t.w, "Checks Run: %d\n", len(result.ChecksRun))
+	fmt.Fprintf(t.w, "Total Findings: %d\n\n", result.TotalFindings)
+
+	fmt.Fprintf(t.w, "Summary:\n")
+	fmt.Fprintf(t.w, "  Critical: %d\n", result.Summary.Critical)
+	fmt.Fprintf(t.w, "  High:     %d\n", result.Summary.High)
+	fmt.Fprintf(t.w, "  Medium:   %d\n", result.Summary.Medium)
+	fmt.Fprintf(t.w, "  Low:      %d\n", result.Summary.Low)
+
+	if len(result.Summary.ByCategory) > 0 {
+		fmt.Fprintf(t.w, "\nBy Category:\n")
+		for cat, count := range result.Summary.ByCategory {
+			fmt.Fprintf(t.w, "  %s: %d findings\n", cat, count)
+		}
+	}
+
+	if result.TotalFindings == 0 {
+		fmt.Fprintln(t.w, "\nNo pod security issues found.")
+		return nil
+	}
+
+	fmt.Fprintf(t.w, "\n=== Findings ===\n\n")
+
+	currentSeverity := ""
+	for _, f := range result.Findings {
+		if string(f.Severity) != currentSeverity {
+			currentSeverity = string(f.Severity)
+			fmt.Fprintf(t.w, "--- %s ---\n\n", strings.ToUpper(currentSeverity))
+		}
+
+		fmt.Fprintf(t.w, "[%s] %s\n", f.CheckID, f.Title)
+		fmt.Fprintf(t.w, "   %s\n", f.Description)
+
+		if len(f.Affected) > 0 {
+			fmt.Fprintf(t.w, "   Affected (%d):\n", len(f.Affected))
+			limit := 5
+			if len(f.Affected) < limit {
+				limit = len(f.Affected)
+			}
+			for i := 0; i < limit; i++ {
+				a := f.Affected[i]
+				container := ""
+				if a.Container != "" {
+					container = "/" + a.Container
+				}
+				fmt.Fprintf(t.w, "     - %s %s/%s%s: %s\n", a.Kind, a.Namespace, a.Name, container, a.Details)
+			}
+			if len(f.Affected) > 5 {
+				fmt.Fprintf(t.w, "     ... and %d more\n", len(f.Affected)-5)
+			}
+		}
+
+		if f.Remediation != "" {
+			fmt.Fprintf(t.w, "   Remediation: %s\n", f.Remediation)
+		}
+		fmt.Fprintln(t.w)
+	}
+
+	return nil
+}
+
+func (t *TableWriter) WriteNetworkPolicyResult(result *analysis.NetworkPolicyResult) error {
+	fmt.Fprintf(t.w, "=== Network Policy Audit ===\n\n")
+	fmt.Fprintf(t.w, "Checks Run: %d\n", len(result.ChecksRun))
+	fmt.Fprintf(t.w, "Total Findings: %d\n", result.TotalFindings)
+	fmt.Fprintf(t.w, "Network Policies: %d\n\n", result.Summary.TotalNetworkPolicies)
+
+	fmt.Fprintf(t.w, "Summary:\n")
+	fmt.Fprintf(t.w, "  Critical: %d\n", result.Summary.Critical)
+	fmt.Fprintf(t.w, "  High:     %d\n", result.Summary.High)
+	fmt.Fprintf(t.w, "  Medium:   %d\n", result.Summary.Medium)
+	fmt.Fprintf(t.w, "  Low:      %d\n", result.Summary.Low)
+	fmt.Fprintf(t.w, "\n  Workloads without policy:     %d\n", result.Summary.WorkloadsWithoutPolicy)
+	fmt.Fprintf(t.w, "  Externally exposed workloads: %d\n", result.Summary.WorkloadsExternallyExposed)
+
+	if len(result.Summary.ByCategory) > 0 {
+		fmt.Fprintf(t.w, "\nBy Category:\n")
+		for cat, count := range result.Summary.ByCategory {
+			fmt.Fprintf(t.w, "  %s: %d findings\n", cat, count)
+		}
+	}
+
+	if result.TotalFindings == 0 {
+		fmt.Fprintln(t.w, "\nNo network policy issues found.")
+		return nil
+	}
+
+	fmt.Fprintf(t.w, "\n=== Findings ===\n\n")
+
+	currentSeverity := ""
+	for _, f := range result.Findings {
+		if string(f.Severity) != currentSeverity {
+			currentSeverity = string(f.Severity)
+			fmt.Fprintf(t.w, "--- %s ---\n\n", strings.ToUpper(currentSeverity))
+		}
+
+		fmt.Fprintf(t.w, "[%s] %s\n", f.CheckID, f.Title)
+		fmt.Fprintf(t.w, "   %s\n", f.Description)
+
+		if len(f.Affected) > 0 {
+			fmt.Fprintf(t.w, "   Affected (%d):\n", len(f.Affected))
+			limit := 5
+			if len(f.Affected) < limit {
+				limit = len(f.Affected)
+			}
+			for i := 0; i < limit; i++ {
+				a := f.Affected[i]
+				services := ""
+				if len(a.Services) > 0 {
+					services = " via " + strings.Join(a.Services, ", ")
+				}
+				fmt.Fprintf(t.w, "     - %s %s/%s: %s%s\n", a.Kind, a.Namespace, a.Name, a.Details, services)
+			}
+			if len(f.Affected) > 5 {
+				fmt.Fprintf(t.w, "     ... and %d more\n", len(f.Affected)-5)
+			}
+		}
+
+		if f.Remediation != "" {
+			fmt.Fprintf(t.w, "   Remediation: %s\n", f.Remediation)
+		}
+		fmt.Fprintln(t.w)
+	}
+
+	return nil
+}
+
+func (t *TableWriter) WriteAttackPathResults(results []*analysis.AttackPathResult) error {
+	if len(results) == 0 {
+		fmt.Fprintln(t.w, "No attack paths found.")
+		return nil
+	}
+
+	summary := analysis.SummarizeAttackPaths(results)
+	fmt.Fprintf(t.w, "=== Attack Path Analysis ===\n\n")
+	fmt.Fprintf(t.w, "Workloads Analyzed: %d\n", summary.TotalWorkloads)
+	fmt.Fprintf(t.w, "Workloads with Paths: %d\n", summary.WorkloadsWithPaths)
+	fmt.Fprintf(t.w, "Total Attack Paths: %d\n\n", summary.TotalPaths)
+
+	fmt.Fprintf(t.w, "Path Severity:\n")
+	fmt.Fprintf(t.w, "  Critical: %d\n", summary.CriticalPaths)
+	fmt.Fprintf(t.w, "  High:     %d\n", summary.HighPaths)
+	fmt.Fprintf(t.w, "  Cloud:    %d\n", summary.CloudPaths)
+	fmt.Fprintf(t.w, "  Cluster:  %d\n", summary.ClusterPaths)
+
+	if len(summary.TopTechniques) > 0 {
+		fmt.Fprintf(t.w, "\nTop Attack Techniques:\n")
+		for _, tc := range summary.TopTechniques {
+			fmt.Fprintf(t.w, "  %-30s %d\n", tc.Name, tc.Count)
+		}
+	}
+
+	if len(summary.TopObjectives) > 0 {
+		fmt.Fprintf(t.w, "\nTop Attack Objectives:\n")
+		for _, obj := range summary.TopObjectives {
+			fmt.Fprintf(t.w, "  %-40s %d\n", obj.Objective, obj.Count)
+		}
+	}
+
+	fmt.Fprintf(t.w, "\n=== Attack Paths by Workload ===\n\n")
+
+	for _, r := range results {
+		if len(r.Paths) == 0 {
+			continue
+		}
+
+		workloadName := "unknown"
+		namespace := "unknown"
+		if r.SourceWorkload != nil {
+			workloadName = r.SourceWorkload.Name
+			namespace = r.SourceWorkload.Namespace
+		}
+
+		fmt.Fprintf(t.w, "======================================================================\n")
+		fmt.Fprintf(t.w, "Workload: %s/%s\n", namespace, workloadName)
+		fmt.Fprintf(t.w, "Attack Paths: %d | Critical: %d | High: %d | Max Severity: %s\n",
+			r.TotalPaths, r.CriticalPaths, r.HighPaths, r.MaxSeverity)
+		if r.CanReachCloud {
+			fmt.Fprintf(t.w, "  Can reach CLOUD resources\n")
+		}
+		if r.CanReachCluster {
+			fmt.Fprintf(t.w, "  Can reach CLUSTER-WIDE resources\n")
+		}
+		fmt.Fprintf(t.w, "======================================================================\n\n")
+
+		for i, path := range r.Paths {
+			fmt.Fprintf(t.w, "--- Path %d: %s ---\n", i+1, path.Name)
+			fmt.Fprintf(t.w, "Objective: %s\n", path.Objective)
+			fmt.Fprintf(t.w, "Severity: %s | Risk Score: %d\n", path.MaxSeverity, path.RiskScore)
+
+			if path.AffectsCloud {
+				fmt.Fprintf(t.w, "  Affects cloud resources\n")
+			}
+			if path.AffectsCluster {
+				fmt.Fprintf(t.w, "  Affects cluster-wide\n")
+			}
+			if path.CrossesNamespace {
+				fmt.Fprintf(t.w, "  Crosses namespace boundaries\n")
+			}
+
+			fmt.Fprintf(t.w, "\nAttack Chain:\n")
+			for _, step := range path.Steps {
+				fmt.Fprintf(t.w, "  [%d] %s\n", step.StepNumber, step.Action)
+				fmt.Fprintf(t.w, "      %s\n", step.Description)
+				if step.MitreID != "" {
+					fmt.Fprintf(t.w, "      MITRE ATT&CK: %s\n", step.MitreID)
+				}
+				if step.ViaRole != "" {
+					fmt.Fprintf(t.w, "      Via: %s\n", step.ViaRole)
+				}
+				for _, detail := range step.Details {
+					fmt.Fprintf(t.w, "      - %s\n", detail)
+				}
+			}
+
+			if len(path.Mitigations) > 0 {
+				fmt.Fprintf(t.w, "\nMitigations:\n")
+				for _, m := range path.Mitigations {
+					fmt.Fprintf(t.w, "  * %s\n", m)
+				}
+			}
+			fmt.Fprintln(t.w)
+		}
+	}
+
+	return nil
+}

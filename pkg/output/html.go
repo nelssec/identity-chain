@@ -132,6 +132,18 @@ func (h *HTMLWriter) WriteCloudAuditResult(result *analysis.CloudIAMAuditResult)
 	return fmt.Errorf("cloud-audit results not supported in HTML format, use table or json output")
 }
 
+func (h *HTMLWriter) WritePodSecurityResult(result *analysis.PodSecurityResult) error {
+	return fmt.Errorf("pod-security results not supported in HTML format, use table or json output")
+}
+
+func (h *HTMLWriter) WriteNetworkPolicyResult(result *analysis.NetworkPolicyResult) error {
+	return fmt.Errorf("network-policy results not supported in HTML format, use table or json output")
+}
+
+func (h *HTMLWriter) WriteAttackPathResults(results []*analysis.AttackPathResult) error {
+	return fmt.Errorf("attack-path results not supported in HTML format, use table or json output")
+}
+
 func getLayer(nodeType string) int {
 	switch nodeType {
 	case "workload":

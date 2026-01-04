@@ -223,22 +223,143 @@ idc rbac-audit -A -o json
 
 ### `idc cloud-audit` - Cloud IAM Security Audit
 
-Analyze cloud IAM configurations for security issues.
+Analyze cloud IAM configurations for security issues. Works with AWS, Azure, and GCP.
 
 ```bash
-# Audit cloud IAM (requires --include-cloud)
+# AWS - Audit IRSA roles
 idc cloud-audit -A --include-cloud --aws-region us-west-2
+
+# Azure - Audit Workload Identity
+idc cloud-audit -A --include-cloud --azure-subscription <subscription-id>
+
+# GCP - Audit Workload Identity
+idc cloud-audit -A --include-cloud --gcp-project my-project
 
 # Output as JSON
 idc cloud-audit -A --include-cloud --aws-region us-west-2 -o json
 ```
 
 **Detected issues:**
-- Admin policy attachments (AdministratorAccess, PowerUserAccess)
+- Admin policy attachments (AdministratorAccess, Owner, roles/owner)
 - IAM privilege escalation paths (iam:*, iam:CreateRole, etc.)
 - Cross-account access via trust policies
 - Overly permissive policies (service:* wildcards)
-- Sensitive data access (s3:*, secretsmanager:*, etc.)
+- Sensitive data access (s3:*, secretsmanager:*, keyvault, etc.)
+
+### `idc pod-security` - Pod Security Audit
+
+Analyze workloads for security misconfigurations based on Pod Security Standards.
+
+```bash
+# Run all checks
+idc pod-security -A
+
+# Run in specific namespace
+idc pod-security -n production
+
+# Run specific checks only
+idc pod-security -A --checks PSS001,PSS006
+
+# Skip specific checks
+idc pod-security -A --skip-checks PSS009,PSS010
+
+# Output as JSON
+idc pod-security -A -o json
+```
+
+**Security checks (12 total):**
+
+| ID | Name | Category | Severity |
+|----|------|----------|----------|
+| PSS001 | Privileged Containers | privilege_escalation | Critical |
+| PSS002 | Host Network | network_exposure | High |
+| PSS003 | Host PID | privilege_escalation | High |
+| PSS004 | Host IPC | privilege_escalation | Medium |
+| PSS005 | Host Path Volumes | data_access | High |
+| PSS006 | Dangerous Capabilities | privilege_escalation | Critical |
+| PSS007 | Running as Root | privilege_escalation | Medium |
+| PSS008 | Allow Privilege Escalation | privilege_escalation | High |
+| PSS009 | Missing Security Context | misconfiguration | Low |
+| PSS010 | Writable Root Filesystem | data_integrity | Low |
+| PSS011 | Host Ports | network_exposure | Medium |
+| PSS012 | Secrets in Environment | secret_exposure | Medium |
+
+### `idc network-policy` - Network Policy Audit
+
+Analyze workloads for network policy coverage and security issues.
+
+```bash
+# Run all checks
+idc network-policy -A
+
+# Run in specific namespace
+idc network-policy -n production
+
+# Run specific checks only
+idc network-policy -A --checks NET001,NET002
+
+# Skip specific checks
+idc network-policy -A --skip-checks NET007
+
+# Output as JSON
+idc network-policy -A -o json
+```
+
+**Security checks (8 total):**
+
+| ID | Name | Category | Severity |
+|----|------|----------|----------|
+| NET001 | No Network Policy | missing_policy | High |
+| NET002 | Externally Exposed Without Policy | external_exposure | Critical |
+| NET003 | Allow All Ingress | overly_permissive | Medium |
+| NET004 | Allow All Egress | overly_permissive | Medium |
+| NET005 | Wide CIDR Block | overly_permissive | Medium |
+| NET006 | No Ingress Policy | incomplete_policy | Medium |
+| NET007 | No Egress Policy | incomplete_policy | Low |
+| NET008 | Host Network Exposed | host_exposure | High |
+
+### `idc attack-path` - Attack Path Visualization
+
+Analyze and visualize potential attack paths from compromised workloads.
+
+```bash
+# Analyze all workloads for attack paths
+idc attack-path --all -A
+
+# Analyze specific workload
+idc attack-path --workload deployment/api-server -n prod
+
+# Include cloud attack paths
+idc attack-path --all -A --include-cloud --aws-region us-west-2
+
+# Output as JSON
+idc attack-path --all -A -o json
+
+# Generate DOT graph for visualization
+idc attack-path --all -A -o dot > attack-paths.dot
+```
+
+**Attack techniques detected (with MITRE ATT&CK mapping):**
+
+| Technique | MITRE ID | Description |
+|-----------|----------|-------------|
+| Initial Access | T1190 | Attacker gains foothold in workload |
+| Secrets Access | T1552.007 | Read K8s secrets containing credentials |
+| Credential Theft | T1528 | Steal service account tokens |
+| Identity Assumption | T1550 | Assume another identity using stolen credentials |
+| Container Execution | T1609 | Execute commands in other containers |
+| Container Deployment | T1610 | Create pods with different SAs |
+| Privilege Escalation | T1078.004 | Escalate via RBAC manipulation |
+| Cloud Resource Access | T1078.004 | Access cloud via IRSA/Workload Identity |
+| Lateral Movement | T1021 | Move to other workloads |
+| Cluster Takeover | T1098 | Gain cluster-admin access |
+
+**Features:**
+- Step-by-step attack chains with MITRE ATT&CK references
+- Risk scoring for each path
+- Mitigation recommendations
+- Cloud and cluster impact indicators
+- Cross-namespace path detection
 
 ### `idc unused` - Find Unused Permissions
 
