@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nelssec/identity-chain/pkg/collector"
 	"github.com/nelssec/identity-chain/pkg/graph"
 )
 
@@ -146,6 +147,46 @@ var PodSecurityChecks = []PodSecurityCheck{
 		Description: "Secrets in environment variables can be exposed in logs and process lists",
 		Remediation: "Mount secrets as files instead of environment variables",
 	},
+	{
+		ID:          "PSS013",
+		Name:        "Missing Resource Limits",
+		Category:    "resource_exhaustion",
+		Severity:    graph.SeverityMedium,
+		Description: "Container lacks CPU/memory limits, enabling resource exhaustion attacks",
+		Remediation: "Set resources.limits for CPU and memory on all containers",
+	},
+	{
+		ID:          "PSS014",
+		Name:        "Missing Resource Requests",
+		Category:    "resource_exhaustion",
+		Severity:    graph.SeverityLow,
+		Description: "Container lacks CPU/memory requests, may affect scheduling",
+		Remediation: "Set resources.requests for CPU and memory on all containers",
+	},
+	{
+		ID:          "PSS015",
+		Name:        "Service Mesh Sidecar Missing",
+		Category:    "network_security",
+		Severity:    graph.SeverityLow,
+		Description: "Workload not enrolled in service mesh, traffic is unencrypted",
+		Remediation: "Enable service mesh sidecar injection for mTLS and traffic encryption",
+	},
+	{
+		ID:          "PSS016",
+		Name:        "Default Namespace Usage",
+		Category:    "misconfiguration",
+		Severity:    graph.SeverityMedium,
+		Description: "Workload running in default namespace",
+		Remediation: "Move workloads to dedicated namespaces with proper RBAC isolation",
+	},
+	{
+		ID:          "PSS017",
+		Name:        "Image Pull Policy Always",
+		Category:    "supply_chain",
+		Severity:    graph.SeverityLow,
+		Description: "Container using :latest tag or missing imagePullPolicy: Always",
+		Remediation: "Use specific image tags and set imagePullPolicy: Always",
+	},
 }
 
 var dangerousCapabilities = map[string]bool{
@@ -230,7 +271,7 @@ func RunPodSecurityAudit(g *graph.Graph, opts PodSecurityOptions) *PodSecurityRe
 		var affected []AffectedWorkload
 
 		for _, workload := range workloads {
-			if !opts.IncludeSystem && isSystemNamespace(workload.Namespace) {
+			if !opts.IncludeSystem && collector.IsSystemNamespace(workload.Namespace) {
 				continue
 			}
 			if opts.Namespace != "" && workload.Namespace != opts.Namespace {
@@ -448,6 +489,95 @@ func checkWorkloadSecurity(workload *graph.Node, check PodSecurityCheck) []Affec
 						Container: c.Name,
 						Details:   fmt.Sprintf("%d secrets exposed as environment variables", c.SecretsInEnv),
 					})
+				}
+			}
+		}
+
+	case "PSS013":
+		// Missing resource limits
+		if workload.Metadata.PodSecurityContext != nil {
+			for _, c := range workload.Metadata.PodSecurityContext.Containers {
+				if !c.HasResourceLimits {
+					affected = append(affected, AffectedWorkload{
+						Kind:      workload.Metadata.WorkloadKind,
+						Namespace: workload.Namespace,
+						Name:      workload.Name,
+						Container: c.Name,
+						Details:   "Container missing CPU/memory limits",
+					})
+				}
+			}
+		}
+
+	case "PSS014":
+		// Missing resource requests
+		if workload.Metadata.PodSecurityContext != nil {
+			for _, c := range workload.Metadata.PodSecurityContext.Containers {
+				if !c.HasResourceRequests {
+					affected = append(affected, AffectedWorkload{
+						Kind:      workload.Metadata.WorkloadKind,
+						Namespace: workload.Namespace,
+						Name:      workload.Name,
+						Container: c.Name,
+						Details:   "Container missing CPU/memory requests",
+					})
+				}
+			}
+		}
+
+	case "PSS015":
+		// Service mesh sidecar missing - check for common sidecar containers
+		hasSidecar := false
+		if workload.Metadata.PodSecurityContext != nil {
+			for _, c := range workload.Metadata.PodSecurityContext.Containers {
+				// Check for common service mesh sidecars
+				if c.Name == "istio-proxy" || c.Name == "envoy" || c.Name == "linkerd-proxy" {
+					hasSidecar = true
+					break
+				}
+			}
+		}
+		// Also check for annotations indicating mesh enrollment
+		if workload.Labels != nil {
+			if _, ok := workload.Labels["sidecar.istio.io/inject"]; ok {
+				hasSidecar = true
+			}
+		}
+		if !hasSidecar && !collector.IsSystemNamespace(workload.Namespace) {
+			affected = append(affected, AffectedWorkload{
+				Kind:      workload.Metadata.WorkloadKind,
+				Namespace: workload.Namespace,
+				Name:      workload.Name,
+				Details:   "No service mesh sidecar detected",
+			})
+		}
+
+	case "PSS016":
+		// Default namespace usage
+		if workload.Namespace == "default" {
+			affected = append(affected, AffectedWorkload{
+				Kind:      workload.Metadata.WorkloadKind,
+				Namespace: workload.Namespace,
+				Name:      workload.Name,
+				Details:   "Workload running in default namespace",
+			})
+		}
+
+	case "PSS017":
+		// Image pull policy check
+		if workload.Metadata.PodSecurityContext != nil {
+			for _, c := range workload.Metadata.PodSecurityContext.Containers {
+				if c.ImagePullPolicy != "Always" {
+					// Check if using :latest tag
+					if strings.HasSuffix(c.Image, ":latest") || !strings.Contains(c.Image, ":") {
+						affected = append(affected, AffectedWorkload{
+							Kind:      workload.Metadata.WorkloadKind,
+							Namespace: workload.Namespace,
+							Name:      workload.Name,
+							Container: c.Name,
+							Details:   fmt.Sprintf("Using image %s without pullPolicy: Always", c.Image),
+						})
+					}
 				}
 			}
 		}

@@ -74,44 +74,6 @@ func WhoCan(g *graph.Graph, query WhoCanQuery) (*WhoCanResult, error) {
 	return result, nil
 }
 
-// WhoCanAccessSecret is a convenience function for finding secret access
-func WhoCanAccessSecret(g *graph.Graph, namespace, secretName string) (*WhoCanResult, error) {
-	return WhoCan(g, WhoCanQuery{
-		Verb:         "get",
-		Resource:     "secrets",
-		ResourceName: secretName,
-		Namespace:    namespace,
-	})
-}
-
-// WhoCanExecPods finds who can exec into pods
-func WhoCanExecPods(g *graph.Graph, namespace string) (*WhoCanResult, error) {
-	return WhoCan(g, WhoCanQuery{
-		Verb:        "create",
-		Resource:    "pods",
-		Subresource: "exec",
-		Namespace:   namespace,
-	})
-}
-
-// WhoCanDeletePods finds who can delete pods
-func WhoCanDeletePods(g *graph.Graph, namespace string) (*WhoCanResult, error) {
-	return WhoCan(g, WhoCanQuery{
-		Verb:      "delete",
-		Resource:  "pods",
-		Namespace: namespace,
-	})
-}
-
-// WhoCanCreateClusterRoleBindings finds who can create cluster role bindings
-func WhoCanCreateClusterRoleBindings(g *graph.Graph) (*WhoCanResult, error) {
-	return WhoCan(g, WhoCanQuery{
-		Verb:     "create",
-		Resource: "clusterrolebindings",
-		APIGroup: "rbac.authorization.k8s.io",
-	})
-}
-
 // RolePermission holds a role's permissions
 type RolePermission struct {
 	RoleNode      *graph.Node
@@ -289,12 +251,92 @@ func findSubjectsForRoles(g *graph.Graph, roles []*graph.Node, namespace string)
 		}
 	}
 
+	// Find all Users and check their bindings
+	users := g.GetNodesByType(graph.NodeUser)
+	for _, user := range users {
+		edges := g.GetOutEdges(user.ID)
+		for _, e := range edges {
+			if e.Type != graph.EdgeBinds {
+				continue
+			}
+
+			role, exists := roleSet[e.To]
+			if !exists {
+				continue
+			}
+
+			subject := Subject{
+				Kind:          "User",
+				Name:          user.Name,
+				ViaRole:       role.Name,
+				IsClusterRole: role.Metadata.IsClusterRole,
+				ViaBinding:    e.Metadata.BindingName,
+				Severity:      determineUserGroupSeverity(user.Name, role),
+			}
+
+			if strings.HasPrefix(user.Name, "system:") {
+				subject.IsSystemSubject = true
+			}
+
+			subjects = append(subjects, subject)
+		}
+	}
+
+	// Find all Groups and check their bindings
+	groups := g.GetNodesByType(graph.NodeGroup)
+	for _, grp := range groups {
+		edges := g.GetOutEdges(grp.ID)
+		for _, e := range edges {
+			if e.Type != graph.EdgeBinds {
+				continue
+			}
+
+			role, exists := roleSet[e.To]
+			if !exists {
+				continue
+			}
+
+			subject := Subject{
+				Kind:          "Group",
+				Name:          grp.Name,
+				ViaRole:       role.Name,
+				IsClusterRole: role.Metadata.IsClusterRole,
+				ViaBinding:    e.Metadata.BindingName,
+				Severity:      determineUserGroupSeverity(grp.Name, role),
+			}
+
+			if strings.HasPrefix(grp.Name, "system:") {
+				subject.IsSystemSubject = true
+			}
+
+			subjects = append(subjects, subject)
+		}
+	}
+
 	return subjects
 }
 
 func determinSubjectSeverity(sa *graph.Node, role *graph.Node) graph.Severity {
 	// System components get low severity (expected)
 	if sa.Namespace == "kube-system" {
+		return graph.SeverityLow
+	}
+
+	// ClusterRoles with dangerous names
+	if role.Metadata.IsClusterRole {
+		nameLower := strings.ToLower(role.Name)
+		if strings.Contains(nameLower, "admin") || strings.Contains(nameLower, "cluster-admin") {
+			return graph.SeverityCritical
+		}
+		return graph.SeverityHigh
+	}
+
+	return graph.SeverityMedium
+}
+
+func determineUserGroupSeverity(name string, role *graph.Node) graph.Severity {
+	// System components get low severity (expected behavior)
+	if strings.HasPrefix(name, "system:") {
 		return graph.SeverityLow
 	}
 

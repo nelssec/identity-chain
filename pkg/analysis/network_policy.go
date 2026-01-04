@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nelssec/identity-chain/pkg/collector"
 	"github.com/nelssec/identity-chain/pkg/graph"
 )
 
 type NetworkPolicyResult struct {
-	Findings      []NetworkPolicyFinding
-	Summary       NetworkPolicySummary
-	ChecksRun     []string
-	TotalFindings int
+	Findings          []NetworkPolicyFinding
+	Summary           NetworkPolicySummary
+	ChecksRun         []string
+	TotalFindings     int
+	SuggestedPolicies []SuggestedPolicy
 }
 
 type NetworkPolicySummary struct {
@@ -156,7 +158,7 @@ func RunNetworkPolicyAudit(g *graph.Graph, opts NetworkPolicyOptions) *NetworkPo
 	workloadExposures := make(map[string]*workloadNetworkInfo)
 
 	for _, workload := range workloads {
-		if !opts.IncludeSystem && isSystemNamespace(workload.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(workload.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && workload.Namespace != opts.Namespace {
@@ -231,6 +233,9 @@ func RunNetworkPolicyAudit(g *graph.Graph, opts NetworkPolicyOptions) *NetworkPo
 	}
 
 	sortNetworkFindingsBySeverity(result.Findings)
+
+	result.SuggestedPolicies = GenerateSuggestedPolicies(g, opts)
+
 	return result
 }
 
@@ -363,7 +368,7 @@ func checkExternallyExposedWithoutPolicy(exposures map[string]*workloadNetworkIn
 func checkAllowAllIngress(g *graph.Graph, opts NetworkPolicyOptions) []AffectedNetworkResource {
 	var affected []AffectedNetworkResource
 	for _, np := range g.GetNodesByType(graph.NodeNetworkPolicy) {
-		if !opts.IncludeSystem && isSystemNamespace(np.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(np.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && np.Namespace != opts.Namespace {
@@ -384,7 +389,7 @@ func checkAllowAllIngress(g *graph.Graph, opts NetworkPolicyOptions) []AffectedN
 func checkAllowAllEgress(g *graph.Graph, opts NetworkPolicyOptions) []AffectedNetworkResource {
 	var affected []AffectedNetworkResource
 	for _, np := range g.GetNodesByType(graph.NodeNetworkPolicy) {
-		if !opts.IncludeSystem && isSystemNamespace(np.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(np.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && np.Namespace != opts.Namespace {
@@ -407,7 +412,7 @@ func checkWideCIDR(g *graph.Graph, opts NetworkPolicyOptions) []AffectedNetworkR
 	wideCIDRs := []string{"0.0.0.0/0", "::/0", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
 
 	for _, np := range g.GetNodesByType(graph.NodeNetworkPolicy) {
-		if !opts.IncludeSystem && isSystemNamespace(np.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(np.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && np.Namespace != opts.Namespace {
@@ -515,4 +520,140 @@ func sortNetworkFindingsBySeverity(findings []NetworkPolicyFinding) {
 			}
 		}
 	}
+}
+
+type SuggestedPolicy struct {
+	Workload      string
+	WorkloadKind  string
+	Namespace     string
+	PolicyName    string
+	YAML          string
+	Description   string
+	IngressPorts  []int32
+	AllowsIngress bool
+	AllowsDNS     bool
+	Services      []string
+}
+
+func GenerateSuggestedPolicies(g *graph.Graph, opts NetworkPolicyOptions) []SuggestedPolicy {
+	var suggestions []SuggestedPolicy
+
+	workloads := g.GetNodesByType(graph.NodeWorkload)
+	for _, workload := range workloads {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(workload.Namespace) {
+			continue
+		}
+		if opts.Namespace != "" && workload.Namespace != opts.Namespace {
+			continue
+		}
+
+		info := analyzeWorkloadNetwork(g, workload)
+		if info.HasAnyPolicy || info.UsesHostNetwork {
+			continue
+		}
+
+		suggestion := buildSuggestedPolicy(workload, info)
+		if suggestion != nil {
+			suggestions = append(suggestions, *suggestion)
+		}
+	}
+
+	return suggestions
+}
+
+func buildSuggestedPolicy(workload *graph.Node, info *workloadNetworkInfo) *SuggestedPolicy {
+	appLabel := workload.Labels["app"]
+	if appLabel == "" {
+		appLabel = workload.Labels["app.kubernetes.io/name"]
+	}
+	if appLabel == "" {
+		appLabel = workload.Name
+	}
+
+	suggestion := &SuggestedPolicy{
+		Workload:     workload.Name,
+		WorkloadKind: workload.Metadata.WorkloadKind,
+		Namespace:    workload.Namespace,
+		PolicyName:   fmt.Sprintf("%s-netpol", workload.Name),
+		AllowsDNS:    true,
+	}
+
+	for _, svc := range info.Services {
+		suggestion.Services = append(suggestion.Services, svc.Name)
+	}
+
+	var servicePorts []int32
+	for _, svc := range info.Services {
+		for _, svcNode := range findServiceByName(workload.Namespace, svc.Name, info) {
+			if svcNode.Metadata.ServiceInfo != nil {
+				for _, p := range svcNode.Metadata.ServiceInfo.Ports {
+					servicePorts = append(servicePorts, p.Port)
+				}
+			}
+		}
+	}
+	suggestion.IngressPorts = servicePorts
+
+	if len(servicePorts) > 0 {
+		suggestion.AllowsIngress = true
+		suggestion.Description = fmt.Sprintf("Allows ingress on service ports %v and DNS egress", servicePorts)
+	} else {
+		suggestion.Description = "Allows DNS egress only (no ingress services detected)"
+	}
+
+	suggestion.YAML = generatePolicyYAML(suggestion, appLabel, servicePorts)
+	return suggestion
+}
+
+func findServiceByName(namespace, name string, info *workloadNetworkInfo) []*graph.Node {
+	return nil
+}
+
+func generatePolicyYAML(s *SuggestedPolicy, appLabel string, ports []int32) string {
+	var yaml strings.Builder
+
+	yaml.WriteString(fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  podSelector:
+    matchLabels:
+      app: %s
+  policyTypes:
+    - Ingress
+    - Egress
+`, s.PolicyName, s.Namespace, appLabel))
+
+	if len(ports) > 0 {
+		yaml.WriteString("  ingress:\n")
+		yaml.WriteString("    - from:\n")
+		yaml.WriteString("        - namespaceSelector:\n")
+		yaml.WriteString("            matchLabels:\n")
+		yaml.WriteString(fmt.Sprintf("              kubernetes.io/metadata.name: %s\n", s.Namespace))
+		yaml.WriteString("      ports:\n")
+		for _, port := range ports {
+			yaml.WriteString(fmt.Sprintf("        - protocol: TCP\n          port: %d\n", port))
+		}
+	} else {
+		yaml.WriteString("  ingress: []\n")
+	}
+
+	yaml.WriteString(`  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+`)
+
+	return yaml.String()
 }

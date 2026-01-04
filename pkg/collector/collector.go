@@ -20,7 +20,7 @@ type Options struct {
 
 func (o Options) ShouldIncludeNamespace(ns string) bool {
 	if o.AllNamespaces {
-		if !o.IncludeSystem && isSystemNamespace(ns) {
+		if !o.IncludeSystem && IsSystemNamespace(ns) {
 			return false
 		}
 		return true
@@ -28,7 +28,8 @@ func (o Options) ShouldIncludeNamespace(ns string) bool {
 	return ns == o.Namespace
 }
 
-func isSystemNamespace(ns string) bool {
+// IsSystemNamespace returns true if the namespace is a Kubernetes system namespace
+func IsSystemNamespace(ns string) bool {
 	systemNamespaces := map[string]bool{
 		"kube-system":     true,
 		"kube-public":     true,

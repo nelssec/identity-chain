@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nelssec/identity-chain/pkg/collector"
 	"github.com/nelssec/identity-chain/pkg/graph"
 )
 
@@ -258,7 +259,7 @@ func checkDefaultSAUsage(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 		if opts.Namespace != "" && w.Namespace != opts.Namespace {
 			continue
 		}
-		if !opts.IncludeSystem && isSystemNamespace(w.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(w.Namespace) {
 			continue
 		}
 
@@ -302,7 +303,7 @@ func checkAutomountTokens(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 		if opts.Namespace != "" && sa.Namespace != opts.Namespace {
 			continue
 		}
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 
@@ -353,7 +354,7 @@ func checkWildcardPermissions(g *graph.Graph, opts RBACAuditOptions) []RBACFindi
 		if opts.Namespace != "" && role.Namespace != opts.Namespace && !role.Metadata.IsClusterRole {
 			continue
 		}
-		if !opts.IncludeSystem && isSystemNamespace(role.Namespace) && !role.Metadata.IsClusterRole {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(role.Namespace) && !role.Metadata.IsClusterRole {
 			continue
 		}
 
@@ -424,7 +425,7 @@ func checkClusterAdminUsage(g *graph.Graph, opts RBACAuditOptions) []RBACFinding
 	var affected []AffectedResource
 
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && sa.Namespace != opts.Namespace {
@@ -474,7 +475,7 @@ func checkSecretsAccess(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 	var affected []AffectedResource
 
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && sa.Namespace != opts.Namespace {
@@ -528,7 +529,7 @@ func checkPodExecAccess(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 	var affected []AffectedResource
 
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && sa.Namespace != opts.Namespace {
@@ -583,7 +584,7 @@ func checkBindEscalate(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 	var affectedEscalate []AffectedResource
 
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 
@@ -649,7 +650,7 @@ func checkImpersonation(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 	var affected []AffectedResource
 
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 
@@ -703,7 +704,7 @@ func checkCrossNamespaceBindings(g *graph.Graph, opts RBACAuditOptions) []RBACFi
 
 	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 
@@ -749,7 +750,7 @@ func checkUnusedServiceAccounts(g *graph.Graph, opts RBACAuditOptions) []RBACFin
 
 	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && sa.Namespace != opts.Namespace {
@@ -804,7 +805,7 @@ func checkNodeProxyAccess(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 
 	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 
@@ -854,7 +855,7 @@ func checkCSRPermissions(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 
 	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 
@@ -924,7 +925,7 @@ func checkWebhookPermissions(g *graph.Graph, opts RBACAuditOptions) []RBACFindin
 
 	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 
@@ -979,7 +980,7 @@ func checkWorkloadCreation(g *graph.Graph, opts RBACAuditOptions) []RBACFinding 
 
 	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 		if opts.Namespace != "" && sa.Namespace != opts.Namespace {
@@ -1052,7 +1053,7 @@ func checkDangerousVerbs(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 
 	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
 	for _, sa := range serviceAccounts {
-		if !opts.IncludeSystem && isSystemNamespace(sa.Namespace) {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
 			continue
 		}
 
@@ -1105,14 +1106,4 @@ func roleKind(role *graph.Node) string {
 		return "ClusterRole"
 	}
 	return "Role"
-}
-
-func isSystemNamespace(ns string) bool {
-	systemNS := map[string]bool{
-		"kube-system":     true,
-		"kube-public":     true,
-		"kube-node-lease": true,
-		"default":         true,
-	}
-	return systemNS[ns]
 }

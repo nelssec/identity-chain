@@ -5,6 +5,8 @@ type NodeType string
 const (
 	NodeWorkload       NodeType = "workload"
 	NodeServiceAccount NodeType = "service_account"
+	NodeUser           NodeType = "user"
+	NodeGroup          NodeType = "group"
 	NodeRole           NodeType = "role"
 	NodeK8sResource    NodeType = "k8s_resource"
 	NodeCloudRole      NodeType = "cloud_role"
@@ -96,6 +98,8 @@ type PodSecurityContext struct {
 
 type ContainerSecurityInfo struct {
 	Name                     string   `json:"name"`
+	Image                    string   `json:"image,omitempty"`
+	ImagePullPolicy          string   `json:"image_pull_policy,omitempty"`
 	Privileged               bool     `json:"privileged,omitempty"`
 	RunAsRoot                bool     `json:"run_as_root,omitempty"`
 	AllowPrivilegeEscalation bool     `json:"allow_privilege_escalation,omitempty"`
@@ -104,6 +108,8 @@ type ContainerSecurityInfo struct {
 	HostPorts                []int32  `json:"host_ports,omitempty"`
 	SecretsInEnv             int      `json:"secrets_in_env,omitempty"`
 	HasSecurityContext       bool     `json:"has_security_context,omitempty"`
+	HasResourceLimits        bool     `json:"has_resource_limits,omitempty"`
+	HasResourceRequests      bool     `json:"has_resource_requests,omitempty"`
 }
 
 type CloudPolicy struct {

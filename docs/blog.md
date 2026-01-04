@@ -1,6 +1,8 @@
 # Understanding Kubernetes Identity Chains and Blast Radius Analysis
 
-When a Kubernetes workload is compromised, one of the first questions security teams need to answer is: **"What can the attacker access?"** This is the blast radius - the total impact of a security breach spreading through the identity chain.
+When a Kubernetes workload is compromised, security teams need to answer: **"What can the attacker access?"**
+
+This is the blast radius - the total impact of a security breach spreading through the identity chain from workload to ServiceAccount to RBAC to cloud IAM.
 
 ## The Problem: Identity Sprawl in Cloud-Native Environments
 
@@ -141,42 +143,43 @@ flowchart TD
 
 ## How Identity Chain Helps
 
-Identity Chain (`idc`) automatically maps these relationships and calculates the blast radius:
+Identity Chain (`idc`) automatically maps these relationships and generates an interactive security dashboard:
 
 ```mermaid
 graph TB
-    subgraph "Input"
+    subgraph "Data Collection"
         K8S[Kubernetes API]
         AWS[AWS IAM API]
-        AZ[Azure IAM API]
         GCP[GCP IAM API]
     end
 
-    subgraph "Identity Chain Analysis"
-        COLLECT[Collect RBAC & Cloud Bindings]
-        BUILD[Build Identity Graph]
-        ANALYZE[Calculate Blast Radius]
-        RISK[Classify Risk Levels]
+    subgraph "Analysis"
+        GRAPH[Build Identity Graph]
+        BLAST[Blast Radius]
+        ATTACK[Attack Paths]
+        RBAC[RBAC Audit]
+        PERMS[Permissions Audit]
     end
 
     subgraph "Output"
-        HTML[Interactive HTML Report]
+        DASH[Interactive Dashboard]
         JSON[JSON for Automation]
-        DOT[Graphviz Visualization]
     end
 
-    K8S --> COLLECT
-    AWS --> COLLECT
-    AZ --> COLLECT
-    GCP --> COLLECT
+    K8S --> GRAPH
+    AWS --> GRAPH
+    GCP --> GRAPH
 
-    COLLECT --> BUILD
-    BUILD --> ANALYZE
-    ANALYZE --> RISK
+    GRAPH --> BLAST
+    GRAPH --> ATTACK
+    GRAPH --> RBAC
+    GRAPH --> PERMS
 
-    RISK --> HTML
-    RISK --> JSON
-    RISK --> DOT
+    BLAST --> DASH
+    ATTACK --> DASH
+    RBAC --> DASH
+    PERMS --> DASH
+    BLAST --> JSON
 ```
 
 ### Example Output
@@ -360,16 +363,17 @@ flowchart TB
 ## Getting Started
 
 ```bash
-# Install
-curl -L https://github.com/nelssec/identity-chain/releases/latest/download/idc-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m) -o idc
-chmod +x idc && sudo mv idc /usr/local/bin/
+# Install via Homebrew
+brew install nelssec/tap/idc
 
-# Quick scan
-idc blast --all -A
+# Generate interactive dashboard
+idc dashboard -A --include-cloud --aws-region us-west-2 -f dashboard.html
+open dashboard.html
 
-# Full report with cloud
-idc blast --all -A --include-cloud --aws-region us-west-2 -o html > report.html
-open report.html
+# Or run individual commands
+idc blast --all -A                    # Blast radius analysis
+idc whocan get secrets -A             # Who can access secrets?
+idc attack-path --all -A              # Attack path visualization
 ```
 
 ## Conclusion

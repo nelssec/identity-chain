@@ -7,11 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/nelssec/identity-chain/pkg/graph"
-	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -356,14 +351,3 @@ func (c *KubernetesCollector) buildCloudRoleEdges(builder *graph.Builder) {
 }
 
 var _ Collector = (*KubernetesCollector)(nil)
-
-// These blank identifier assignments keep the k8s.io/api/* imports from
-// being flagged as unused by the compiler. The types are used implicitly
-// through client-go's return types and the graph.Builder methods.
-var (
-	_ = appsv1.Deployment{}
-	_ = batchv1.Job{}
-	_ = corev1.Pod{}
-	_ = networkingv1.NetworkPolicy{}
-	_ = rbacv1.Role{}
-)

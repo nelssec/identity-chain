@@ -13,7 +13,6 @@ const (
 	FormatTable Format = "table"
 	FormatJSON  Format = "json"
 	FormatDOT   Format = "dot"
-	FormatHTML  Format = "html"
 )
 
 type Writer interface {
@@ -37,8 +36,6 @@ func NewWriter(w io.Writer, format Format) Writer {
 		return NewJSONWriter(w)
 	case FormatDOT:
 		return NewDOTWriter(w)
-	case FormatHTML:
-		return NewHTMLWriter(w)
 	default:
 		return NewTableWriter(w)
 	}

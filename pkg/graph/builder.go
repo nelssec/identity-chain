@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"fmt"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -78,18 +77,28 @@ func (b *Builder) AddRoleBinding(rb *rbacv1.RoleBinding) error {
 	roleNodeID := GenerateNodeID(NodeRole, roleNamespace, rb.RoleRef.Name)
 
 	for _, subject := range rb.Subjects {
-		if subject.Kind != "ServiceAccount" {
+		var subjectNodeID string
+
+		switch subject.Kind {
+		case "ServiceAccount":
+			saNamespace := subject.Namespace
+			if saNamespace == "" {
+				saNamespace = rb.Namespace
+			}
+			subjectNodeID = GenerateNodeID(NodeServiceAccount, saNamespace, subject.Name)
+		case "User":
+			node := NewNode(NodeUser, "", subject.Name)
+			_ = b.graph.AddNode(node)
+			subjectNodeID = node.ID
+		case "Group":
+			node := NewNode(NodeGroup, "", subject.Name)
+			_ = b.graph.AddNode(node)
+			subjectNodeID = node.ID
+		default:
 			continue
 		}
 
-		saNamespace := subject.Namespace
-		if saNamespace == "" {
-			saNamespace = rb.Namespace
-		}
-
-		saNodeID := GenerateNodeID(NodeServiceAccount, saNamespace, subject.Name)
-
-		edge := NewEdge(EdgeBinds, saNodeID, roleNodeID)
+		edge := NewEdge(EdgeBinds, subjectNodeID, roleNodeID)
 		edge.Metadata.BindingName = rb.Name
 		edge.Metadata.BindingNamespace = rb.Namespace
 		edge.Metadata.IsClusterBinding = false
@@ -104,13 +113,24 @@ func (b *Builder) AddClusterRoleBinding(crb *rbacv1.ClusterRoleBinding) error {
 	roleNodeID := GenerateNodeID(NodeRole, "", crb.RoleRef.Name)
 
 	for _, subject := range crb.Subjects {
-		if subject.Kind != "ServiceAccount" {
+		var subjectNodeID string
+
+		switch subject.Kind {
+		case "ServiceAccount":
+			subjectNodeID = GenerateNodeID(NodeServiceAccount, subject.Namespace, subject.Name)
+		case "User":
+			node := NewNode(NodeUser, "", subject.Name)
+			_ = b.graph.AddNode(node)
+			subjectNodeID = node.ID
+		case "Group":
+			node := NewNode(NodeGroup, "", subject.Name)
+			_ = b.graph.AddNode(node)
+			subjectNodeID = node.ID
+		default:
 			continue
 		}
 
-		saNodeID := GenerateNodeID(NodeServiceAccount, subject.Namespace, subject.Name)
-
-		edge := NewEdge(EdgeBinds, saNodeID, roleNodeID)
+		edge := NewEdge(EdgeBinds, subjectNodeID, roleNodeID)
 		edge.Metadata.BindingName = crb.Name
 		edge.Metadata.IsClusterBinding = true
 
@@ -267,7 +287,24 @@ func extractPodSecurityContext(podSpec *corev1.PodSpec) *PodSecurityContext {
 	allContainers := append(podSpec.Containers, podSpec.InitContainers...)
 	for _, c := range allContainers {
 		csi := ContainerSecurityInfo{
-			Name: c.Name,
+			Name:            c.Name,
+			Image:           c.Image,
+			ImagePullPolicy: string(c.ImagePullPolicy),
+		}
+
+		if c.Resources.Limits != nil {
+			if _, hasCPU := c.Resources.Limits["cpu"]; hasCPU {
+				if _, hasMem := c.Resources.Limits["memory"]; hasMem {
+					csi.HasResourceLimits = true
+				}
+			}
+		}
+		if c.Resources.Requests != nil {
+			if _, hasCPU := c.Resources.Requests["cpu"]; hasCPU {
+				if _, hasMem := c.Resources.Requests["memory"]; hasMem {
+					csi.HasResourceRequests = true
+				}
+			}
 		}
 
 		if c.SecurityContext != nil {
@@ -501,7 +538,6 @@ func (b *Builder) AddNetworkPolicy(np *networkingv1.NetworkPolicy) error {
 		npInfo.PolicyTypes = append(npInfo.PolicyTypes, string(pt))
 	}
 
-	// Check for deny-all or allow-all ingress
 	hasIngress := false
 	for _, pt := range np.Spec.PolicyTypes {
 		if pt == networkingv1.PolicyTypeIngress {
@@ -513,7 +549,6 @@ func (b *Builder) AddNetworkPolicy(np *networkingv1.NetworkPolicy) error {
 		npInfo.DenyAllIngress = true
 	}
 
-	// Check for deny-all or allow-all egress
 	hasEgress := false
 	for _, pt := range np.Spec.PolicyTypes {
 		if pt == networkingv1.PolicyTypeEgress {
@@ -525,9 +560,7 @@ func (b *Builder) AddNetworkPolicy(np *networkingv1.NetworkPolicy) error {
 		npInfo.DenyAllEgress = true
 	}
 
-	// Parse ingress rules
 	for _, ingress := range np.Spec.Ingress {
-		// Empty From means allow all
 		if len(ingress.From) == 0 && len(ingress.Ports) == 0 {
 			npInfo.AllowAllIngress = true
 		}
@@ -554,9 +587,7 @@ func (b *Builder) AddNetworkPolicy(np *networkingv1.NetworkPolicy) error {
 		}
 	}
 
-	// Parse egress rules
 	for _, egress := range np.Spec.Egress {
-		// Empty To means allow all
 		if len(egress.To) == 0 && len(egress.Ports) == 0 {
 			npInfo.AllowAllEgress = true
 		}
@@ -627,7 +658,6 @@ func (b *Builder) GetWorkloadNetworkExposure(workloadID string) *WorkloadNetwork
 		WorkloadKind:      workload.Metadata.WorkloadKind,
 	}
 
-	// Find network policies that select this workload
 	for _, np := range b.graph.GetNodesByType(NodeNetworkPolicy) {
 		if np.Namespace != workload.Namespace {
 			continue
@@ -639,7 +669,6 @@ func (b *Builder) GetWorkloadNetworkExposure(workloadID string) *WorkloadNetwork
 		}
 	}
 
-	// Find services that select this workload
 	for _, svc := range b.graph.GetNodesByType(NodeService) {
 		if svc.Namespace != workload.Namespace {
 			continue
@@ -682,7 +711,7 @@ type ServiceExposure struct {
 
 func matchLabels(workloadLabels, selector map[string]string) bool {
 	if len(selector) == 0 {
-		return true // Empty selector matches all
+		return true
 	}
 	for k, v := range selector {
 		if workloadLabels[k] != v {
@@ -709,6 +738,3 @@ func hasEgressPolicy(np *Node) bool {
 	}
 	return false
 }
-
-// Placeholder to use fmt import
-var _ = fmt.Sprintf

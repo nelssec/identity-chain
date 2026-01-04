@@ -6,9 +6,12 @@ idc-*
 # Test outputs
 *.html
 *.dot
-*.png
 *.svg
 /tmp/
+
+# Images (except embedded assets)
+*.png
+!pkg/output/assets/*.png
 
 # IDE
 .idea/

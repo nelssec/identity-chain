@@ -138,11 +138,15 @@ jobs:
             ### Quick Start
 
             ```bash
+            # Generate interactive security dashboard
+            idc dashboard -A -f dashboard.html
+            open dashboard.html
+
             # Analyze blast radius for all workloads
             idc blast --all -A
 
-            # Generate HTML report with cloud IAM
-            idc blast --all -A --include-cloud --aws-region us-west-2 -o html > report.html
+            # Include cloud IAM analysis
+            idc blast --all -A --include-cloud --aws-region us-west-2
             ```
 
             See [README](https://github.com/${{ github.repository }}#readme) for full documentation.

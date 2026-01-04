@@ -29,6 +29,25 @@ var (
 	azureSubID    string
 )
 
+// resolveWorkloadNodeID finds the node ID for a workload reference
+func resolveWorkloadNodeID(g *graph.Graph, workloadRef, ns string) string {
+	kind, ns, name := graph.ParseWorkloadRef(workloadRef, ns)
+	nodeID := graph.GenerateNodeID(graph.NodeWorkload, ns, name)
+
+	node := g.GetNode(nodeID)
+	if node == nil {
+		nodes := g.GetNodesByNamespace(ns)
+		for _, n := range nodes {
+			if n.Type == graph.NodeWorkload && n.Name == name {
+				if kind == "" || n.Metadata.WorkloadKind == kind {
+					return n.ID
+				}
+			}
+		}
+	}
+	return nodeID
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "idc",
@@ -46,7 +65,7 @@ Examples:
 	rootCmd.PersistentFlags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "Scan all namespaces")
 	rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	rootCmd.PersistentFlags().StringVar(&kubecontext, "context", "", "Kubernetes context to use")
-	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, dot, html")
+	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, dot")
 	rootCmd.PersistentFlags().BoolVar(&includeSystem, "include-system", false, "Include system namespaces")
 	rootCmd.PersistentFlags().BoolVar(&includeCloud, "include-cloud", false, "Include cloud IAM analysis (AWS/GCP/Azure)")
 	rootCmd.PersistentFlags().StringVar(&awsRegion, "aws-region", "", "AWS region for IAM lookups")
@@ -67,6 +86,7 @@ Examples:
 	rootCmd.AddCommand(podSecurityCmd())
 	rootCmd.AddCommand(networkPolicyCmd())
 	rootCmd.AddCommand(attackPathCmd())
+	rootCmd.AddCommand(dashboardCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -110,22 +130,7 @@ Examples:
 				return fmt.Errorf("--workload or --all is required")
 			}
 
-			kind, ns, name := graph.ParseWorkloadRef(workload, namespace)
-			nodeID := graph.GenerateNodeID(graph.NodeWorkload, ns, name)
-
-			node := g.GetNode(nodeID)
-			if node == nil {
-				nodes := g.GetNodesByNamespace(ns)
-				for _, n := range nodes {
-					if n.Type == graph.NodeWorkload && n.Name == name {
-						if kind == "" || n.Metadata.WorkloadKind == kind {
-							nodeID = n.ID
-							break
-						}
-					}
-				}
-			}
-
+			nodeID := resolveWorkloadNodeID(g, workload, namespace)
 			result, err := analysis.BlastRadius(g, nodeID)
 			if err != nil {
 				return fmt.Errorf("blast radius analysis failed: %w", err)
@@ -724,22 +729,7 @@ Examples:
 				return fmt.Errorf("--workload or --all is required")
 			}
 
-			kind, ns, name := graph.ParseWorkloadRef(workload, namespace)
-			nodeID := graph.GenerateNodeID(graph.NodeWorkload, ns, name)
-
-			node := g.GetNode(nodeID)
-			if node == nil {
-				nodes := g.GetNodesByNamespace(ns)
-				for _, n := range nodes {
-					if n.Type == graph.NodeWorkload && n.Name == name {
-						if kind == "" || n.Metadata.WorkloadKind == kind {
-							nodeID = n.ID
-							break
-						}
-					}
-				}
-			}
-
+			nodeID := resolveWorkloadNodeID(g, workload, namespace)
 			result, err := analysis.FindPrivescPaths(g, nodeID, maxDepth)
 			if err != nil {
 				return fmt.Errorf("privesc analysis failed: %w", err)
@@ -1131,22 +1121,7 @@ Examples:
 				return fmt.Errorf("--workload or --all is required")
 			}
 
-			kind, ns, name := graph.ParseWorkloadRef(workload, namespace)
-			nodeID := graph.GenerateNodeID(graph.NodeWorkload, ns, name)
-
-			node := g.GetNode(nodeID)
-			if node == nil {
-				nodes := g.GetNodesByNamespace(ns)
-				for _, n := range nodes {
-					if n.Type == graph.NodeWorkload && n.Name == name {
-						if kind == "" || n.Metadata.WorkloadKind == kind {
-							nodeID = n.ID
-							break
-						}
-					}
-				}
-			}
-
+			nodeID := resolveWorkloadNodeID(g, workload, namespace)
 			result, err := analysis.FindAttackPaths(g, nodeID, opts)
 			if err != nil {
 				return fmt.Errorf("attack path analysis failed: %w", err)
@@ -1165,4 +1140,245 @@ Examples:
 	cmd.Flags().IntVar(&maxDepth, "depth", 5, "Maximum path depth to search")
 
 	return cmd
+}
+
+func dashboardCmd() *cobra.Command {
+	var outputFile string
+
+	cmd := &cobra.Command{
+		Use:   "dashboard",
+		Short: "Generate unified security dashboard",
+		Long: `Generate a comprehensive security dashboard combining all analysis results:
+- Blast radius analysis
+- Attack path visualization
+- RBAC security audit
+- Pod security analysis
+- Network policy audit
+- Cloud IAM audit (if --include-cloud)
+
+Outputs an interactive HTML dashboard with tabs for each analysis type.
+
+Examples:
+  idc dashboard -A -o report.html
+  idc dashboard -A --include-cloud --aws-region us-west-2 -o report.html`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			fmt.Fprintln(os.Stderr, "Collecting cluster data...")
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			// Determine output destination
+			var w *os.File
+			if outputFile != "" {
+				w, err = os.Create(outputFile)
+				if err != nil {
+					return fmt.Errorf("failed to create output file: %w", err)
+				}
+				defer w.Close()
+			} else {
+				w = os.Stdout
+			}
+
+			// Run all analyses
+			fmt.Fprintln(os.Stderr, "Running blast radius analysis...")
+			blastResults, _ := analysis.AllWorkloadBlastRadius(g)
+
+			fmt.Fprintln(os.Stderr, "Running attack path analysis...")
+			attackOpts := analysis.AttackPathOptions{
+				MaxDepth:       5,
+				IncludeCloud:   includeCloud,
+				IncludePrivesc: true,
+			}
+			attackResults, _ := analysis.FindAllAttackPaths(g, attackOpts)
+
+			fmt.Fprintln(os.Stderr, "Running RBAC audit...")
+			rbacResult := analysis.RunRBACAudit(g, analysis.RBACAuditOptions{})
+
+			fmt.Fprintln(os.Stderr, "Running pod security audit...")
+			podSecResult := analysis.RunPodSecurityAudit(g, analysis.PodSecurityOptions{})
+
+			fmt.Fprintln(os.Stderr, "Running network policy audit...")
+			netPolResult := analysis.RunNetworkPolicyAudit(g, analysis.NetworkPolicyOptions{})
+
+			var cloudResult *analysis.CloudIAMAuditResult
+			if includeCloud {
+				fmt.Fprintln(os.Stderr, "Running cloud IAM audit...")
+				cloudResult = analysis.AnalyzeCloudIAM(g)
+			}
+
+			fmt.Fprintln(os.Stderr, "Running permissions audit...")
+			permissionsData := collectPermissionsData(g)
+
+			fmt.Fprintln(os.Stderr, "Generating dashboard...")
+
+			// Generate unified dashboard
+			dashboard := output.NewDashboard(w)
+			err = dashboard.Generate(output.DashboardData{
+				BlastResults:   blastResults,
+				AttackPaths:    attackResults,
+				RBACAudit:      rbacResult,
+				PodSecurity:    podSecResult,
+				NetworkPolicy:  netPolResult,
+				CloudAudit:     cloudResult,
+				Permissions:    permissionsData,
+				GraphStats:     g.Stats(),
+				Graph:          g,
+			})
+
+			if err != nil {
+				return fmt.Errorf("failed to generate dashboard: %w", err)
+			}
+
+			if outputFile != "" {
+				fmt.Fprintf(os.Stderr, "Dashboard saved to: %s\n", outputFile)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&outputFile, "output-file", "f", "", "Output file path (default: stdout)")
+
+	return cmd
+}
+
+// collectPermissionsData runs WhoCan queries for dangerous permissions
+func collectPermissionsData(g *graph.Graph) *output.PermissionsData {
+	data := &output.PermissionsData{}
+
+	// Get all namespaces from the graph
+	namespaces := make(map[string]bool)
+	for _, node := range g.GetNodesByType(graph.NodeWorkload) {
+		namespaces[node.Namespace] = true
+	}
+	for _, node := range g.GetNodesByType(graph.NodeServiceAccount) {
+		namespaces[node.Namespace] = true
+	}
+
+	// Query dangerous permissions across namespaces
+	for ns := range namespaces {
+		// Who can get secrets
+		if result, err := analysis.WhoCan(g, analysis.WhoCanQuery{
+			Verb: "get", Resource: "secrets", Namespace: ns,
+		}); err == nil && len(result.Subjects) > 0 {
+			data.SecretAccess = append(data.SecretAccess, result)
+		}
+
+		// Who can exec into pods
+		if result, err := analysis.WhoCan(g, analysis.WhoCanQuery{
+			Verb: "create", Resource: "pods", Subresource: "exec", Namespace: ns,
+		}); err == nil && len(result.Subjects) > 0 {
+			data.PodExec = append(data.PodExec, result)
+		}
+
+		// Who can create pods
+		if result, err := analysis.WhoCan(g, analysis.WhoCanQuery{
+			Verb: "create", Resource: "pods", Namespace: ns,
+		}); err == nil && len(result.Subjects) > 0 {
+			data.PodCreate = append(data.PodCreate, result)
+		}
+
+		// Who can delete pods
+		if result, err := analysis.WhoCan(g, analysis.WhoCanQuery{
+			Verb: "delete", Resource: "pods", Namespace: ns,
+		}); err == nil && len(result.Subjects) > 0 {
+			data.PodDelete = append(data.PodDelete, result)
+		}
+	}
+
+	// Cluster-wide dangerous permissions
+	// Who can create clusterrolebindings
+	if result, err := analysis.WhoCan(g, analysis.WhoCanQuery{
+		Verb: "create", Resource: "clusterrolebindings", APIGroup: "rbac.authorization.k8s.io",
+	}); err == nil && len(result.Subjects) > 0 {
+		data.ClusterAdmin = append(data.ClusterAdmin, result)
+	}
+
+	// Who can create rolebindings
+	if result, err := analysis.WhoCan(g, analysis.WhoCanQuery{
+		Verb: "create", Resource: "rolebindings", APIGroup: "rbac.authorization.k8s.io",
+	}); err == nil && len(result.Subjects) > 0 {
+		data.RoleBindings = append(data.RoleBindings, result)
+	}
+
+	// Who can impersonate
+	if result, err := analysis.WhoCan(g, analysis.WhoCanQuery{
+		Verb: "impersonate", Resource: "users",
+	}); err == nil && len(result.Subjects) > 0 {
+		data.Impersonate = append(data.Impersonate, result)
+	}
+	if result, err := analysis.WhoCan(g, analysis.WhoCanQuery{
+		Verb: "impersonate", Resource: "serviceaccounts",
+	}); err == nil && len(result.Subjects) > 0 {
+		data.Impersonate = append(data.Impersonate, result)
+	}
+
+	// Build dangerous permissions summary
+	data.DangerousPerms = buildDangerousPermsSummary(data)
+
+	return data
+}
+
+// buildDangerousPermsSummary creates a consolidated list of dangerous permissions
+func buildDangerousPermsSummary(data *output.PermissionsData) []output.DangerousPermission {
+	var perms []output.DangerousPermission
+	seen := make(map[string]bool)
+
+	addPerm := func(subject, kind, ns, permission, severity, details string) {
+		key := subject + "|" + ns + "|" + permission
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		perms = append(perms, output.DangerousPermission{
+			Subject:     subject,
+			SubjectKind: kind,
+			Namespace:   ns,
+			Permission:  permission,
+			Severity:    severity,
+			Details:     details,
+		})
+	}
+
+	// Process secret access
+	for _, result := range data.SecretAccess {
+		for _, subj := range result.Subjects {
+			ns := result.Namespace
+			if ns == "" {
+				ns = "cluster-wide"
+			}
+			addPerm(subj.Name, subj.Kind, ns, "get secrets", "high", "Can read secrets in "+ns)
+		}
+	}
+
+	// Process pod exec
+	for _, result := range data.PodExec {
+		for _, subj := range result.Subjects {
+			ns := result.Namespace
+			if ns == "" {
+				ns = "cluster-wide"
+			}
+			addPerm(subj.Name, subj.Kind, ns, "exec pods", "critical", "Can execute commands in pods")
+		}
+	}
+
+	// Process cluster admin permissions
+	for _, result := range data.ClusterAdmin {
+		for _, subj := range result.Subjects {
+			addPerm(subj.Name, subj.Kind, "cluster-wide", "create clusterrolebindings", "critical", "Can grant cluster-admin access")
+		}
+	}
+
+	// Process impersonate
+	for _, result := range data.Impersonate {
+		for _, subj := range result.Subjects {
+			addPerm(subj.Name, subj.Kind, "cluster-wide", "impersonate", "critical", "Can impersonate other identities")
+		}
+	}
+
+	return perms
 }

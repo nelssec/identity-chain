@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nelssec/identity-chain/pkg/collector"
 	"github.com/nelssec/identity-chain/pkg/graph"
 )
 
@@ -314,7 +315,7 @@ func FindAllAttackPaths(g *graph.Graph, opts AttackPathOptions) ([]*AttackPathRe
 
 	for _, w := range workloads {
 		// Skip system namespaces if not included
-		if !opts.IncludeCloud && isSystemNamespace(w.Namespace) {
+		if !opts.IncludeCloud && collector.IsSystemNamespace(w.Namespace) {
 			continue
 		}
 
