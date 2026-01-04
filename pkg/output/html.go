@@ -3,6 +3,7 @@ package output
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"strings"
 	"time"
@@ -137,14 +138,14 @@ func (h *HTMLWriter) buildBlastGraph(result *analysis.BlastResult) htmlGraph {
 
 	if result.SourceWorkload != nil {
 		nodes = append(nodes, htmlNode{
-			ID:        result.SourceWorkload.ID,
-			Name:      result.SourceWorkload.Name,
+			ID:        escapeForJSON(result.SourceWorkload.ID),
+			Name:      escapeForJSON(result.SourceWorkload.Name),
 			Type:      "workload",
-			Namespace: result.SourceWorkload.Namespace,
+			Namespace: escapeForJSON(result.SourceWorkload.Namespace),
 			Risk:      string(result.MaxSeverity),
 			RiskScore: severityScore(result.MaxSeverity),
 			Layer:     0,
-			Kind:      result.SourceWorkload.Metadata.WorkloadKind,
+			Kind:      escapeForJSON(result.SourceWorkload.Metadata.WorkloadKind),
 			InUse:     true,
 		})
 	}
@@ -192,14 +193,14 @@ func (h *HTMLWriter) buildBlastGraph(result *analysis.BlastResult) htmlGraph {
 		}
 
 		nodes = append(nodes, htmlNode{
-			ID:               result.ServiceAccount.ID,
-			Name:             result.ServiceAccount.Name,
+			ID:               escapeForJSON(result.ServiceAccount.ID),
+			Name:             escapeForJSON(result.ServiceAccount.Name),
 			Type:             "serviceaccount",
-			Namespace:        result.ServiceAccount.Namespace,
+			Namespace:        escapeForJSON(result.ServiceAccount.Namespace),
 			Risk:             saRisk,
 			RiskScore:        severityScore(graph.Severity(saRisk)),
 			Layer:            1,
-			CloudARN:         result.ServiceAccount.Metadata.CloudRoleARN,
+			CloudARN:         escapeForJSON(result.ServiceAccount.Metadata.CloudRoleARN),
 			InUse:            true,
 			IsOverprivileged: result.MaxSeverity == graph.SeverityCritical || result.MaxSeverity == graph.SeverityHigh,
 			TotalPerms:       result.TotalK8sPerms,
@@ -226,8 +227,8 @@ func (h *HTMLWriter) buildBlastGraph(result *analysis.BlastResult) htmlGraph {
 			rolesSeen[access.ViaRole] = true
 			roleID := "role:" + access.ViaRole
 			nodes = append(nodes, htmlNode{
-				ID:        roleID,
-				Name:      access.ViaRole,
+				ID:        escapeForJSON(roleID),
+				Name:      escapeForJSON(access.ViaRole),
 				Type:      "role",
 				Risk:      "medium",
 				RiskScore: 50,
@@ -253,14 +254,14 @@ func (h *HTMLWriter) buildBlastGraph(result *analysis.BlastResult) htmlGraph {
 		if !resourcesSeen[resourceID] {
 			resourcesSeen[resourceID] = true
 			nodes = append(nodes, htmlNode{
-				ID:        resourceID,
-				Name:      access.Resource.Name,
+				ID:        escapeForJSON(resourceID),
+				Name:      escapeForJSON(access.Resource.Name),
 				Type:      "resource",
-				Namespace: access.Resource.Namespace,
+				Namespace: escapeForJSON(access.Resource.Namespace),
 				Risk:      string(access.Severity),
 				RiskScore: severityScore(access.Severity),
 				Layer:     3,
-				Kind:      access.Resource.Metadata.ResourceKind,
+				Kind:      escapeForJSON(access.Resource.Metadata.ResourceKind),
 				Verbs:     access.Verbs,
 			})
 
@@ -288,25 +289,34 @@ func (h *HTMLWriter) buildBlastGraph(result *analysis.BlastResult) htmlGraph {
 
 		policies := make([]cloudPolicy, 0)
 		for _, p := range access.Policies {
+			escapedActions := make([]string, len(p.Actions))
+			for i, a := range p.Actions {
+				escapedActions[i] = escapeForJSON(a)
+			}
 			policies = append(policies, cloudPolicy{
-				Name:     p.Name,
-				Actions:  p.Actions,
+				Name:     escapeForJSON(p.Name),
+				Actions:  escapedActions,
 				IsAdmin:  p.IsAdmin,
 				Severity: string(p.Severity),
 			})
 		}
 
+		escapedBlastRadius := make([]string, len(access.BlastRadius))
+		for i, br := range access.BlastRadius {
+			escapedBlastRadius[i] = escapeForJSON(br)
+		}
+
 		nodes = append(nodes, htmlNode{
-			ID:            cloudID,
-			Name:          shortARN(access.RoleARN),
+			ID:            escapeForJSON(cloudID),
+			Name:          escapeForJSON(shortARN(access.RoleARN)),
 			Type:          "cloudrole",
 			Risk:          "high",
 			RiskScore:     80,
 			Layer:         4,
-			CloudARN:      access.RoleARN,
-			Kind:          access.Provider,
+			CloudARN:      escapeForJSON(access.RoleARN),
+			Kind:          escapeForJSON(access.Provider),
 			CloudPolicies: policies,
-			BlastRadius:   access.BlastRadius,
+			BlastRadius:   escapedBlastRadius,
 		})
 		cloudCount++
 
@@ -728,6 +738,16 @@ func formatVerbs(verbs []string) string {
 func sanitizeCloudID(s string) string {
 	s = strings.ReplaceAll(s, ":", "_")
 	s = strings.ReplaceAll(s, "/", "_")
+	return s
+}
+
+func escapeForJSON(s string) string {
+	s = html.EscapeString(s)
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\t", "\\t")
 	return s
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -232,19 +233,19 @@ func (e *ElasticsearchSource) buildQuery(opts QueryOptions) string {
 	}
 
 	if opts.Namespace != "" {
-		must = append(must, fmt.Sprintf(`{"term":{"objectRef.namespace":"%s"}}`, opts.Namespace))
+		must = append(must, fmt.Sprintf(`{"term":{"objectRef.namespace":%s}}`, escapeJSONString(opts.Namespace)))
 	}
 
 	if opts.User != "" {
-		must = append(must, fmt.Sprintf(`{"term":{"user.username":"%s"}}`, opts.User))
+		must = append(must, fmt.Sprintf(`{"term":{"user.username":%s}}`, escapeJSONString(opts.User)))
 	}
 
 	if opts.Resource != "" {
-		must = append(must, fmt.Sprintf(`{"term":{"objectRef.resource":"%s"}}`, opts.Resource))
+		must = append(must, fmt.Sprintf(`{"term":{"objectRef.resource":%s}}`, escapeJSONString(opts.Resource)))
 	}
 
 	if opts.Verb != "" {
-		must = append(must, fmt.Sprintf(`{"term":{"verb":"%s"}}`, opts.Verb))
+		must = append(must, fmt.Sprintf(`{"term":{"verb":%s}}`, escapeJSONString(opts.Verb)))
 	}
 
 	if !opts.IncludeSystem {
@@ -266,6 +267,14 @@ func (e *ElasticsearchSource) buildQuery(opts QueryOptions) string {
 		"size": %d,
 		"sort": [{"@timestamp": "desc"}]
 	}`, mustClause, size)
+}
+
+func escapeJSONString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return `""`
+	}
+	return string(b)
 }
 
 func (e *ElasticsearchSource) parseResponse(body io.Reader) ([]Event, error) {
@@ -342,7 +351,8 @@ func (l *LokiSource) GetEvents(ctx context.Context, opts QueryOptions) ([]Event,
 	query := `{job="kube-apiserver"} |= "audit"`
 
 	if opts.Namespace != "" {
-		query += fmt.Sprintf(` |= "%s"`, opts.Namespace)
+		escapedNS := strings.ReplaceAll(opts.Namespace, `"`, `\"`)
+		query += fmt.Sprintf(` |= "%s"`, escapedNS)
 	}
 
 	start := opts.StartTime
@@ -359,14 +369,14 @@ func (l *LokiSource) GetEvents(ctx context.Context, opts QueryOptions) ([]Event,
 		limit = opts.Limit
 	}
 
-	url := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&end=%d&limit=%d",
+	reqURL := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&end=%d&limit=%d",
 		l.endpoint,
-		query,
+		url.QueryEscape(query),
 		start.UnixNano(),
 		end.UnixNano(),
 		limit)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
