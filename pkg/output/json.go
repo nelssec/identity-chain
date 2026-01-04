@@ -47,6 +47,26 @@ func (j *JSONWriter) WriteStats(stats graph.GraphStats) error {
 	return j.encoder.Encode(stats)
 }
 
+func (j *JSONWriter) WritePrivescResults(results []*analysis.PrivescResult) error {
+	return j.encoder.Encode(results)
+}
+
+func (j *JSONWriter) WriteWhoCanResult(result *analysis.WhoCanResult) error {
+	return j.encoder.Encode(result)
+}
+
+func (j *JSONWriter) WriteWhatCanResult(result *analysis.ReverseRBACResult) error {
+	return j.encoder.Encode(result)
+}
+
+func (j *JSONWriter) WriteRBACAuditResult(result *analysis.RBACAuditResult) error {
+	return j.encoder.Encode(result)
+}
+
+func (j *JSONWriter) WriteCloudAuditResult(result *analysis.CloudIAMAuditResult) error {
+	return j.encoder.Encode(result)
+}
+
 type blastResultJSON struct {
 	Workload        *nodeRef          `json:"workload,omitempty"`
 	ServiceAccount  *nodeRef          `json:"service_account,omitempty"`

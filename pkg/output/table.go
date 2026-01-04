@@ -196,3 +196,232 @@ func severityColor(s graph.Severity) string {
 		return string(s)
 	}
 }
+
+func (t *TableWriter) WritePrivescResults(results []*analysis.PrivescResult) error {
+	if len(results) == 0 {
+		fmt.Fprintln(t.w, "No privilege escalation paths found.")
+		return nil
+	}
+
+	summary := analysis.SummarizePrivescResults(results)
+	fmt.Fprintf(t.w, "=== Privilege Escalation Analysis ===\n\n")
+	fmt.Fprintf(t.w, "Workloads with privesc paths: %d\n", summary.WorkloadsWithPrivesc)
+	fmt.Fprintf(t.w, "Critical paths: %d\n", summary.CriticalPaths)
+	fmt.Fprintf(t.w, "High severity paths: %d\n", summary.HighPaths)
+
+	if len(summary.TopVectors) > 0 {
+		fmt.Fprintf(t.w, "\nTop Attack Vectors:\n")
+		for i, v := range summary.TopVectors {
+			if i >= 5 {
+				break
+			}
+			fmt.Fprintf(t.w, "  %-30s %d occurrences\n", v.Vector.String(), v.Count)
+		}
+	}
+
+	fmt.Fprintf(t.w, "\n=== Detailed Findings ===\n\n")
+	for _, r := range results {
+		if r.SourceNode != nil {
+			fmt.Fprintf(t.w, "--------------------------------------------------------------\n")
+			fmt.Fprintf(t.w, "[%s] %s/%s\n", r.MaxSeverity, r.SourceNode.Namespace, r.SourceNode.Name)
+		}
+
+		for _, v := range r.DirectVectors {
+			fmt.Fprintf(t.w, "   VECTOR: %s\n", v.Vector.String())
+			fmt.Fprintf(t.w, "     %s\n", v.Description)
+			fmt.Fprintf(t.w, "     Via: %s | Verbs: %v\n", v.Role.Name, v.Verbs)
+		}
+
+		for _, p := range r.Paths {
+			fmt.Fprintf(t.w, "   PATH: %s (%s)\n", p.FinalPrivilege, p.Severity)
+			for _, step := range p.Steps {
+				fmt.Fprintf(t.w, "      Step %d: %s\n", step.StepNumber, step.Description)
+			}
+			if len(p.Mitigations) > 0 {
+				fmt.Fprintf(t.w, "     Mitigation: %s\n", p.Mitigations[0])
+			}
+		}
+		fmt.Fprintln(t.w)
+	}
+
+	return nil
+}
+
+func (t *TableWriter) WriteWhoCanResult(result *analysis.WhoCanResult) error {
+	if result.TotalCount == 0 {
+		fmt.Fprintf(t.w, "No subjects can %s %s", result.Verb, result.Resource)
+		if result.Namespace != "" {
+			fmt.Fprintf(t.w, " in namespace %s", result.Namespace)
+		}
+		fmt.Fprintln(t.w)
+		return nil
+	}
+
+	fmt.Fprintf(t.w, "=== Who Can %s %s", result.Verb, result.Resource)
+	if result.Namespace != "" {
+		fmt.Fprintf(t.w, " (namespace: %s)", result.Namespace)
+	}
+	fmt.Fprintf(t.w, " ===\n\n")
+
+	fmt.Fprintf(t.w, "Found %d subjects:\n\n", result.TotalCount)
+
+	fmt.Fprintf(t.w, "%-50s %-20s %-15s %s\n", "SUBJECT", "VIA ROLE", "SEVERITY", "WORKLOADS")
+	fmt.Fprintf(t.w, "%s\n", strings.Repeat("-", 100))
+
+	for _, s := range result.Subjects {
+		subject := s.Namespace + "/" + s.Name
+		workloadCount := len(s.Workloads)
+		workloadInfo := fmt.Sprintf("%d workloads", workloadCount)
+		if workloadCount == 0 {
+			workloadInfo = "(unused)"
+		}
+
+		roleType := ""
+		if s.IsClusterRole {
+			roleType = " (cluster)"
+		}
+
+		fmt.Fprintf(t.w, "%-50s %-20s %-15s %s\n",
+			truncateString(subject, 50),
+			truncateString(s.ViaRole+roleType, 20),
+			s.Severity,
+			workloadInfo)
+	}
+
+	return nil
+}
+
+func (t *TableWriter) WriteWhatCanResult(result *analysis.ReverseRBACResult) error {
+	if len(result.Permissions) == 0 {
+		fmt.Fprintf(t.w, "ServiceAccount %s/%s has no RBAC permissions.\n", result.Namespace, result.Subject)
+		return nil
+	}
+
+	fmt.Fprintf(t.w, "=== Permissions for %s/%s ===\n\n", result.Namespace, result.Subject)
+	fmt.Fprintf(t.w, "Max Severity: %s\n", result.MaxSeverity)
+	fmt.Fprintf(t.w, "Total Verbs: %d\n", result.TotalVerbs)
+	fmt.Fprintf(t.w, "Roles: %d\n\n", len(result.Roles))
+
+	fmt.Fprintf(t.w, "%-30s %-40s %-15s %s\n", "RESOURCE", "VERBS", "SEVERITY", "VIA ROLE")
+	fmt.Fprintf(t.w, "%s\n", strings.Repeat("-", 100))
+
+	for _, p := range result.Permissions {
+		verbs := strings.Join(p.Verbs, ", ")
+		roleType := ""
+		if p.IsClusterRole {
+			roleType = " (cluster)"
+		}
+		fmt.Fprintf(t.w, "%-30s %-40s %-15s %s\n",
+			truncateString(p.Resource, 30),
+			truncateString(verbs, 40),
+			p.Severity,
+			p.ViaRole+roleType)
+	}
+
+	return nil
+}
+
+func (t *TableWriter) WriteRBACAuditResult(result *analysis.RBACAuditResult) error {
+	fmt.Fprintf(t.w, "=== RBAC Security Audit ===\n\n")
+	fmt.Fprintf(t.w, "Checks Run: %d\n", len(result.ChecksRun))
+	fmt.Fprintf(t.w, "Total Findings: %d\n\n", result.TotalFindings)
+
+	fmt.Fprintf(t.w, "Summary:\n")
+	fmt.Fprintf(t.w, "  Critical: %d\n", result.Summary.Critical)
+	fmt.Fprintf(t.w, "  High:     %d\n", result.Summary.High)
+	fmt.Fprintf(t.w, "  Medium:   %d\n", result.Summary.Medium)
+	fmt.Fprintf(t.w, "  Low:      %d\n", result.Summary.Low)
+
+	if result.TotalFindings == 0 {
+		fmt.Fprintln(t.w, "\nNo security issues found.")
+		return nil
+	}
+
+	fmt.Fprintf(t.w, "\n=== Findings ===\n\n")
+
+	currentSeverity := ""
+	for _, f := range result.Findings {
+		if string(f.Severity) != currentSeverity {
+			currentSeverity = string(f.Severity)
+			fmt.Fprintf(t.w, "--- %s ---\n\n", strings.ToUpper(currentSeverity))
+		}
+
+		fmt.Fprintf(t.w, "[%s] %s\n", f.CheckID, f.Title)
+		fmt.Fprintf(t.w, "   %s\n", f.Description)
+
+		if len(f.Affected) > 0 {
+			fmt.Fprintf(t.w, "   Affected (%d):\n", len(f.Affected))
+			limit := 5
+			if len(f.Affected) < limit {
+				limit = len(f.Affected)
+			}
+			for i := 0; i < limit; i++ {
+				a := f.Affected[i]
+				fmt.Fprintf(t.w, "     - %s/%s: %s\n", a.Namespace, a.Name, a.Details)
+			}
+			if len(f.Affected) > 5 {
+				fmt.Fprintf(t.w, "     ... and %d more\n", len(f.Affected)-5)
+			}
+		}
+
+		if f.Remediation != "" {
+			fmt.Fprintf(t.w, "   Remediation: %s\n", f.Remediation)
+		}
+		fmt.Fprintln(t.w)
+	}
+
+	return nil
+}
+
+func (t *TableWriter) WriteCloudAuditResult(result *analysis.CloudIAMAuditResult) error {
+	fmt.Fprintf(t.w, "=== Cloud IAM Security Audit ===\n\n")
+	fmt.Fprintf(t.w, "Roles Analyzed: %d\n", result.AnalyzedRoles)
+	fmt.Fprintf(t.w, "Total Findings: %d\n\n", len(result.Findings))
+
+	fmt.Fprintf(t.w, "Summary:\n")
+	fmt.Fprintf(t.w, "  Critical: %d\n", result.Summary.Critical)
+	fmt.Fprintf(t.w, "  High:     %d\n", result.Summary.High)
+	fmt.Fprintf(t.w, "  Medium:   %d\n", result.Summary.Medium)
+	fmt.Fprintf(t.w, "  Low:      %d\n", result.Summary.Low)
+
+	if len(result.Summary.ByProvider) > 0 {
+		fmt.Fprintf(t.w, "\nBy Provider:\n")
+		for provider, count := range result.Summary.ByProvider {
+			fmt.Fprintf(t.w, "  %s: %d findings\n", provider, count)
+		}
+	}
+
+	if len(result.Findings) == 0 {
+		fmt.Fprintln(t.w, "\nNo cloud IAM security issues found.")
+		return nil
+	}
+
+	fmt.Fprintf(t.w, "\n=== Findings ===\n\n")
+
+	for _, f := range result.Findings {
+		fmt.Fprintf(t.w, "[%s] %s\n", f.Severity, f.Title)
+		fmt.Fprintf(t.w, "   Category: %s\n", f.Category)
+		fmt.Fprintf(t.w, "   Role: %s\n", truncateString(f.RoleARN, 60))
+		fmt.Fprintf(t.w, "   %s\n", f.Description)
+
+		if f.Details != nil {
+			for k, v := range f.Details {
+				fmt.Fprintf(t.w, "   %s: %v\n", k, v)
+			}
+		}
+
+		if f.Remediation != "" {
+			fmt.Fprintf(t.w, "   Remediation: %s\n", f.Remediation)
+		}
+		fmt.Fprintln(t.w)
+	}
+
+	return nil
+}
+
+func truncateString(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-2] + ".."
+}

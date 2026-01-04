@@ -376,3 +376,118 @@ func severityEdgeColor(s graph.Severity) string {
 		return "#388e3c"
 	}
 }
+
+func (d *DOTWriter) WritePrivescResults(results []*analysis.PrivescResult) error {
+	fmt.Fprintln(d.w, "digraph PrivilegeEscalation {")
+	fmt.Fprintln(d.w, "  rankdir=LR;")
+	fmt.Fprintln(d.w, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(d.w, "  edge [fontname=\"Helvetica\", fontsize=9];")
+	fmt.Fprintln(d.w)
+
+	for _, result := range results {
+		if result.SourceNode != nil {
+			label := fmt.Sprintf("%s\\n%s/%s", result.SourceNode.Metadata.WorkloadKind, result.SourceNode.Namespace, result.SourceNode.Name)
+			fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"#e3f2fd\", color=\"#1976d2\"];\n",
+				result.SourceNode.ID, label)
+		}
+
+		for i, v := range result.DirectVectors {
+			vectorID := fmt.Sprintf("vector_%s_%d", sanitizeID(result.SourceNode.ID), i)
+			label := fmt.Sprintf("%s\\n%s", v.Vector.String(), v.Role.Name)
+			fillColor, borderColor := severityColors(v.Severity)
+			fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\"];\n",
+				vectorID, label, fillColor, borderColor)
+			fmt.Fprintf(d.w, "  \"%s\" -> \"%s\" [label=\"privesc\", color=\"%s\", penwidth=2];\n",
+				result.SourceNode.ID, vectorID, severityEdgeColor(v.Severity))
+		}
+	}
+
+	fmt.Fprintln(d.w, "}")
+	return nil
+}
+
+func (d *DOTWriter) WriteWhoCanResult(result *analysis.WhoCanResult) error {
+	fmt.Fprintln(d.w, "digraph WhoCan {")
+	fmt.Fprintln(d.w, "  rankdir=LR;")
+	fmt.Fprintln(d.w, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(d.w)
+
+	resourceLabel := fmt.Sprintf("%s %s", result.Verb, result.Resource)
+	fmt.Fprintf(d.w, "  \"target\" [label=\"%s\", fillcolor=\"#ffcdd2\", color=\"#c62828\", shape=octagon];\n", resourceLabel)
+
+	for i, s := range result.Subjects {
+		subjectID := fmt.Sprintf("subject_%d", i)
+		label := fmt.Sprintf("SA\\n%s/%s", s.Namespace, s.Name)
+		fillColor, borderColor := severityColors(s.Severity)
+		fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\"];\n",
+			subjectID, label, fillColor, borderColor)
+		fmt.Fprintf(d.w, "  \"%s\" -> \"target\" [label=\"via %s\"];\n", subjectID, s.ViaRole)
+	}
+
+	fmt.Fprintln(d.w, "}")
+	return nil
+}
+
+func (d *DOTWriter) WriteWhatCanResult(result *analysis.ReverseRBACResult) error {
+	fmt.Fprintln(d.w, "digraph WhatCan {")
+	fmt.Fprintln(d.w, "  rankdir=LR;")
+	fmt.Fprintln(d.w, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(d.w)
+
+	saLabel := fmt.Sprintf("SA\\n%s/%s", result.Namespace, result.Subject)
+	fmt.Fprintf(d.w, "  \"sa\" [label=\"%s\", fillcolor=\"#fff3e0\", color=\"#f57c00\"];\n", saLabel)
+
+	for i, p := range result.Permissions {
+		permID := fmt.Sprintf("perm_%d", i)
+		label := fmt.Sprintf("%s\\n%s", p.Resource, strings.Join(p.Verbs, ", "))
+		fillColor, borderColor := severityColors(p.Severity)
+		fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\"];\n",
+			permID, label, fillColor, borderColor)
+		fmt.Fprintf(d.w, "  \"sa\" -> \"%s\" [label=\"via %s\"];\n", permID, p.ViaRole)
+	}
+
+	fmt.Fprintln(d.w, "}")
+	return nil
+}
+
+func (d *DOTWriter) WriteRBACAuditResult(result *analysis.RBACAuditResult) error {
+	fmt.Fprintln(d.w, "digraph RBACAudit {")
+	fmt.Fprintln(d.w, "  rankdir=TB;")
+	fmt.Fprintln(d.w, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(d.w)
+
+	fmt.Fprintf(d.w, "  \"summary\" [label=\"RBAC Audit\\nCritical: %d\\nHigh: %d\\nMedium: %d\\nLow: %d\", shape=note, fillcolor=\"#f5f5f5\"];\n",
+		result.Summary.Critical, result.Summary.High, result.Summary.Medium, result.Summary.Low)
+
+	for i, f := range result.Findings {
+		findingID := fmt.Sprintf("finding_%d", i)
+		label := fmt.Sprintf("[%s] %s", f.CheckID, f.Title)
+		fillColor, borderColor := severityColors(f.Severity)
+		fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\"];\n",
+			findingID, label, fillColor, borderColor)
+	}
+
+	fmt.Fprintln(d.w, "}")
+	return nil
+}
+
+func (d *DOTWriter) WriteCloudAuditResult(result *analysis.CloudIAMAuditResult) error {
+	fmt.Fprintln(d.w, "digraph CloudAudit {")
+	fmt.Fprintln(d.w, "  rankdir=TB;")
+	fmt.Fprintln(d.w, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(d.w)
+
+	fmt.Fprintf(d.w, "  \"summary\" [label=\"Cloud IAM Audit\\nRoles: %d\\nFindings: %d\", shape=note, fillcolor=\"#f5f5f5\"];\n",
+		result.AnalyzedRoles, len(result.Findings))
+
+	for i, f := range result.Findings {
+		findingID := fmt.Sprintf("finding_%d", i)
+		label := fmt.Sprintf("[%s] %s\\n%s", f.Severity, f.Title, shortARN(f.RoleARN))
+		fillColor, borderColor := severityColors(f.Severity)
+		fmt.Fprintf(d.w, "  \"%s\" [label=\"%s\", fillcolor=\"%s\", color=\"%s\"];\n",
+			findingID, label, fillColor, borderColor)
+	}
+
+	fmt.Fprintln(d.w, "}")
+	return nil
+}

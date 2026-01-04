@@ -21,6 +21,11 @@ type Writer interface {
 	WriteBlastResults(results []*analysis.BlastResult) error
 	WriteGraph(g *graph.Graph) error
 	WriteStats(stats graph.GraphStats) error
+	WritePrivescResults(results []*analysis.PrivescResult) error
+	WriteWhoCanResult(result *analysis.WhoCanResult) error
+	WriteWhatCanResult(result *analysis.ReverseRBACResult) error
+	WriteRBACAuditResult(result *analysis.RBACAuditResult) error
+	WriteCloudAuditResult(result *analysis.CloudIAMAuditResult) error
 }
 
 func NewWriter(w io.Writer, format Format) Writer {

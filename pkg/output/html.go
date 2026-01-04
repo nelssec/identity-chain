@@ -112,6 +112,26 @@ func (h *HTMLWriter) WriteStats(stats graph.GraphStats) error {
 	return fmt.Errorf("stats not supported in HTML format, use graph or blast commands")
 }
 
+func (h *HTMLWriter) WritePrivescResults(results []*analysis.PrivescResult) error {
+	return fmt.Errorf("privesc results not supported in HTML format, use table or json output")
+}
+
+func (h *HTMLWriter) WriteWhoCanResult(result *analysis.WhoCanResult) error {
+	return fmt.Errorf("whocan results not supported in HTML format, use table or json output")
+}
+
+func (h *HTMLWriter) WriteWhatCanResult(result *analysis.ReverseRBACResult) error {
+	return fmt.Errorf("whatcan results not supported in HTML format, use table or json output")
+}
+
+func (h *HTMLWriter) WriteRBACAuditResult(result *analysis.RBACAuditResult) error {
+	return fmt.Errorf("rbac-audit results not supported in HTML format, use table or json output")
+}
+
+func (h *HTMLWriter) WriteCloudAuditResult(result *analysis.CloudIAMAuditResult) error {
+	return fmt.Errorf("cloud-audit results not supported in HTML format, use table or json output")
+}
+
 func getLayer(nodeType string) int {
 	switch nodeType {
 	case "workload":

@@ -59,6 +59,11 @@ Examples:
 	rootCmd.AddCommand(unusedCmd())
 	rootCmd.AddCommand(auditCmd())
 	rootCmd.AddCommand(identityCmd())
+	rootCmd.AddCommand(privescCmd())
+	rootCmd.AddCommand(whocanCmd())
+	rootCmd.AddCommand(whatcanCmd())
+	rootCmd.AddCommand(rbacAuditCmd())
+	rootCmd.AddCommand(cloudAuditCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -542,8 +547,8 @@ Examples:
 			}
 
 			for _, sa := range cloudSAs {
-				fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-				fmt.Printf("📌 %s/%s\n", sa.Namespace, sa.Name)
+				fmt.Printf("------------------------------------------------------------------------------\n")
+				fmt.Printf("ServiceAccount: %s/%s\n", sa.Namespace, sa.Name)
 
 				if sa.Metadata.CloudRoleARN != "" {
 					provider := detectCloudProvider(sa.Metadata.CloudRoleARN)
@@ -557,20 +562,20 @@ Examples:
 							if err == nil && len(info.RoleAssignments) > 0 {
 								fmt.Printf("\n   Azure Role Assignments:\n")
 								for _, ra := range info.RoleAssignments {
-									fmt.Printf("   ├─ Role: %s\n", ra.RoleName)
-									fmt.Printf("   │  Scope: %s\n", truncateScope(ra.Scope))
+									fmt.Printf("   -  Role: %s\n", ra.RoleName)
+									fmt.Printf("     Scope: %s\n", truncateScope(ra.Scope))
 									if len(ra.Actions) > 0 {
-										fmt.Printf("   │  Actions: %v\n", truncateActions(ra.Actions, 3))
+										fmt.Printf("     Actions: %v\n", truncateActions(ra.Actions, 3))
 									}
 									if len(ra.DataActions) > 0 {
-										fmt.Printf("   │  DataActions: %v\n", truncateActions(ra.DataActions, 3))
+										fmt.Printf("     DataActions: %v\n", truncateActions(ra.DataActions, 3))
 									}
 								}
 							} else if err != nil {
-								fmt.Printf("   ⚠ Could not fetch Azure roles: %v\n", err)
+								fmt.Printf("   Warning: Could not fetch Azure roles: %v\n", err)
 							}
 						} else {
-							fmt.Printf("   ℹ Use --azure-subscription to fetch role details\n")
+							fmt.Printf("   Note: Use --azure-subscription to fetch role details\n")
 						}
 
 					case "AWS":
@@ -579,21 +584,21 @@ Examples:
 							if err == nil && len(roleInfo.Policies) > 0 {
 								fmt.Printf("\n   AWS IAM Policies:\n")
 								for _, policy := range roleInfo.Policies {
-									fmt.Printf("   ├─ Policy: %s\n", policy.Name)
+									fmt.Printf("   -  Policy: %s\n", policy.Name)
 									if policy.IsAdmin {
-										fmt.Printf("   │  ⚠ ADMIN POLICY\n")
+										fmt.Printf("     Warning: ADMIN POLICY\n")
 									}
 									for _, stmt := range policy.Statements {
 										if len(stmt.Action) > 0 {
-											fmt.Printf("   │  Actions: %v\n", truncateActions(stmt.Action, 3))
+											fmt.Printf("     Actions: %v\n", truncateActions(stmt.Action, 3))
 										}
 									}
 								}
 							} else if err != nil {
-								fmt.Printf("   ⚠ Could not fetch AWS roles: %v\n", err)
+								fmt.Printf("   Warning: Could not fetch AWS roles: %v\n", err)
 							}
 						} else {
-							fmt.Printf("   ℹ Use --aws-region to fetch role details\n")
+							fmt.Printf("   Note: Use --aws-region to fetch role details\n")
 						}
 					}
 				}
@@ -602,10 +607,10 @@ Examples:
 				if len(workloads) > 0 {
 					fmt.Printf("\n   Used by workloads:\n")
 					for _, w := range workloads {
-						fmt.Printf("   └─ %s/%s (%s)\n", w.Namespace, w.Name, w.Metadata.WorkloadKind)
+						fmt.Printf("   -  %s/%s (%s)\n", w.Namespace, w.Name, w.Metadata.WorkloadKind)
 					}
 				} else {
-					fmt.Printf("\n   ⚠ UNUSED - No workloads using this SA\n")
+					fmt.Printf("\n   Warning: UNUSED - No workloads using this SA\n")
 				}
 
 				fmt.Println()
@@ -617,7 +622,7 @@ Examples:
 
 				source, err := audit.NewAzureLogAnalyticsSource(azureWorkspaceID)
 				if err != nil {
-					fmt.Printf("⚠ Could not connect to Log Analytics: %v\n", err)
+					fmt.Printf("Warning: Could not connect to Log Analytics: %v\n", err)
 				} else {
 					opts := audit.QueryOptions{
 						StartTime: time.Now().Add(-24 * time.Hour),
@@ -625,7 +630,7 @@ Examples:
 					}
 					events, err := source.GetEvents(ctx, opts)
 					if err != nil {
-						fmt.Printf("⚠ Query failed: %v\n", err)
+						fmt.Printf("Warning: Query failed: %v\n", err)
 					} else {
 						fmt.Printf("Found %d audit events in last 24h\n", len(events))
 					}
@@ -675,4 +680,289 @@ func truncateActions(actions []string, max int) []string {
 	result := actions[:max]
 	result = append(result, fmt.Sprintf("+%d more", len(actions)-max))
 	return result
+}
+
+func privescCmd() *cobra.Command {
+	var workload string
+	var all bool
+	var maxDepth int
+
+	cmd := &cobra.Command{
+		Use:   "privesc",
+		Short: "Find privilege escalation paths",
+		Long: `Detect potential privilege escalation paths in RBAC configuration.
+Identifies dangerous permissions like bind, escalate, impersonate, and pod creation
+that could allow an attacker to elevate privileges.
+
+Examples:
+  idc privesc --all -A
+  idc privesc --workload deployment/api-server -n prod
+  idc privesc --all -A --depth 5`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			if all {
+				results, err := analysis.FindAllPrivescPaths(g, maxDepth)
+				if err != nil {
+					return fmt.Errorf("privesc analysis failed: %w", err)
+				}
+
+				writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+				return writer.WritePrivescResults(results)
+			}
+
+			if workload == "" {
+				return fmt.Errorf("--workload or --all is required")
+			}
+
+			kind, ns, name := graph.ParseWorkloadRef(workload, namespace)
+			nodeID := graph.GenerateNodeID(graph.NodeWorkload, ns, name)
+
+			node := g.GetNode(nodeID)
+			if node == nil {
+				nodes := g.GetNodesByNamespace(ns)
+				for _, n := range nodes {
+					if n.Type == graph.NodeWorkload && n.Name == name {
+						if kind == "" || n.Metadata.WorkloadKind == kind {
+							nodeID = n.ID
+							break
+						}
+					}
+				}
+			}
+
+			result, err := analysis.FindPrivescPaths(g, nodeID, maxDepth)
+			if err != nil {
+				return fmt.Errorf("privesc analysis failed: %w", err)
+			}
+
+			if result == nil {
+				return fmt.Errorf("workload not found: %s", workload)
+			}
+
+			if len(result.DirectVectors) == 0 && len(result.Paths) == 0 {
+				fmt.Println("No privilege escalation paths found for this workload.")
+				return nil
+			}
+
+			fmt.Printf("=== Privilege Escalation Analysis for %s ===\n\n", workload)
+			fmt.Printf("Max Severity: %s\n", result.MaxSeverity)
+			fmt.Printf("Can reach cluster-admin: %v\n", result.CanReachAdmin)
+
+			if len(result.DirectVectors) > 0 {
+				fmt.Printf("\nDirect Vectors:\n")
+				for _, v := range result.DirectVectors {
+					fmt.Printf("  [%s] %s\n", v.Severity, v.Vector.String())
+					fmt.Printf("    %s\n", v.Description)
+					fmt.Printf("    Via: %s\n", v.Role.Name)
+				}
+			}
+
+			if len(result.Paths) > 0 {
+				fmt.Printf("\nMulti-hop Paths:\n")
+				for i, p := range result.Paths {
+					fmt.Printf("  Path %d [%s]: %s\n", i+1, p.Severity, p.Description)
+					for _, step := range p.Steps {
+						fmt.Printf("    Step %d: %s\n", step.StepNumber, step.Description)
+					}
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&workload, "workload", "w", "", "Workload to analyze")
+	cmd.Flags().BoolVar(&all, "all", false, "Analyze all workloads")
+	cmd.Flags().IntVar(&maxDepth, "depth", 3, "Maximum path depth to search")
+
+	return cmd
+}
+
+func whocanCmd() *cobra.Command {
+	var resourceName string
+
+	cmd := &cobra.Command{
+		Use:   "whocan [verb] [resource]",
+		Short: "Find who can perform an action",
+		Long: `Reverse RBAC lookup - find all subjects that can perform a given action.
+
+Examples:
+  idc whocan get secrets -n prod
+  idc whocan create pods -A
+  idc whocan delete deployments -n prod
+  idc whocan create clusterrolebindings`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			verb := args[0]
+			resource := args[1]
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			query := analysis.WhoCanQuery{
+				Verb:         verb,
+				Resource:     resource,
+				ResourceName: resourceName,
+				Namespace:    namespace,
+			}
+
+			if allNamespaces {
+				query.Namespace = ""
+			}
+
+			result, err := analysis.WhoCan(g, query)
+			if err != nil {
+				return fmt.Errorf("whocan query failed: %w", err)
+			}
+
+			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			return writer.WriteWhoCanResult(result)
+		},
+	}
+
+	cmd.Flags().StringVar(&resourceName, "resource-name", "", "Specific resource name to check")
+
+	return cmd
+}
+
+func whatcanCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "whatcan [serviceaccount]",
+		Short: "Show all permissions for a service account",
+		Long: `List all permissions granted to a specific service account.
+
+Examples:
+  idc whatcan my-service-account -n prod
+  idc whatcan default -n kube-system`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			saName := args[0]
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			query := analysis.ReverseRBACQuery{
+				SubjectKind: "ServiceAccount",
+				SubjectName: saName,
+				Namespace:   namespace,
+			}
+
+			result, err := analysis.WhatCan(g, query)
+			if err != nil {
+				return fmt.Errorf("whatcan query failed: %w", err)
+			}
+
+			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			return writer.WriteWhatCanResult(result)
+		},
+	}
+
+	return cmd
+}
+
+func rbacAuditCmd() *cobra.Command {
+	var checks string
+	var skipChecks string
+
+	cmd := &cobra.Command{
+		Use:   "rbac-audit",
+		Short: "Run RBAC security audit",
+		Long: `Comprehensive security audit of RBAC configuration.
+Checks for dangerous permissions, over-privileged accounts, and misconfigurations.
+
+Examples:
+  idc rbac-audit -A
+  idc rbac-audit -n prod
+  idc rbac-audit -A --checks RBAC001,RBAC002
+  idc rbac-audit -A --skip RBAC010`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.RBACAuditOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			if checks != "" {
+				opts.ChecksToRun = strings.Split(checks, ",")
+			}
+			if skipChecks != "" {
+				opts.SkipChecks = strings.Split(skipChecks, ",")
+			}
+
+			result := analysis.RunRBACAudit(g, opts)
+
+			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			return writer.WriteRBACAuditResult(result)
+		},
+	}
+
+	cmd.Flags().StringVar(&checks, "checks", "", "Comma-separated list of checks to run (e.g., RBAC001,RBAC002)")
+	cmd.Flags().StringVar(&skipChecks, "skip", "", "Comma-separated list of checks to skip")
+
+	return cmd
+}
+
+func cloudAuditCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cloud-audit",
+		Short: "Audit cloud IAM configurations",
+		Long: `Analyze cloud IAM roles for security issues including privilege escalation,
+cross-account access, and overly permissive policies.
+
+Requires --include-cloud flag and appropriate cloud credentials.
+
+Examples:
+  idc cloud-audit -A --include-cloud --aws-region us-west-2
+  idc cloud-audit -A --include-cloud --azure-subscription <sub-id>`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			if !includeCloud {
+				fmt.Println("Cloud audit requires --include-cloud flag.")
+				fmt.Println("Example: idc cloud-audit -A --include-cloud --aws-region us-west-2")
+				return nil
+			}
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			result := analysis.AnalyzeCloudIAM(g)
+
+			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			return writer.WriteCloudAuditResult(result)
+		},
+	}
+
+	return cmd
 }
