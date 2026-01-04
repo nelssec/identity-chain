@@ -61,6 +61,12 @@ jobs:
             -o idc-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} \
             ./cmd/idc/
 
+      - name: Compress with UPX (Linux only)
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y upx
+          upx --best --lzma idc-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} || true
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
