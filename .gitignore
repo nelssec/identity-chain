@@ -1,0 +1,34 @@
+# Binaries
+idc
+idc-*
+*.exe
+
+# Test outputs
+*.html
+*.dot
+*.png
+*.svg
+/tmp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# Credentials (never commit)
+*.pem
+*.key
+credentials.json
+.env
+.env.*
