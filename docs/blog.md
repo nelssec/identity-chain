@@ -413,6 +413,76 @@ idc scc -A                            # OpenShift SCC analysis
 idc sa-lifecycle -A                   # Find orphaned service accounts
 ```
 
+## Auto-Remediation
+
+Identity Chain can generate fix manifests for security findings:
+
+```bash
+# Generate fixes for all findings
+idc remediate -A -f fixes.yaml
+
+# Apply the fixes
+kubectl apply -f fixes.yaml
+```
+
+This generates ready-to-apply Kubernetes YAML for:
+- **RBAC issues**: Replace cluster-admin bindings, remove secrets access, replace wildcards
+- **Pod security**: Disable privileged, add security contexts, drop capabilities
+- **Network policies**: Create default-deny policies with DNS egress
+
+## Custom Security Checks
+
+Define organization-specific security rules in YAML:
+
+```yaml
+checks:
+  - id: ORG001
+    name: "Production namespace requires resource limits"
+    severity: high
+    match:
+      kind: Workload
+      namespacePattern: "^prod-"
+    condition:
+      missingSecurityField: "resourceLimits"
+```
+
+Run custom checks:
+```bash
+idc check -A --config org-checks.yaml
+```
+
+## Multi-Cluster Security Posture
+
+Track security across multiple clusters over time:
+
+```bash
+# Configure clusters
+idc clusters add --name prod --context prod-eks
+idc clusters add --name staging --context staging-eks
+
+# Scan all clusters
+idc clusters scan
+
+# Compare security posture
+idc trend
+
+# View historical data
+idc history --cluster prod
+```
+
+```mermaid
+graph LR
+    subgraph "Multi-Cluster View"
+        C1[Prod Cluster] --> S[Central Store]
+        C2[Staging Cluster] --> S
+        C3[Dev Cluster] --> S
+    end
+
+    S --> T[Trend Analysis]
+    S --> H[Historical Data]
+    S --> R[Comparison Reports]
+```
+
 ## Conclusion
 
 Understanding the blast radius of Kubernetes workloads is critical for:

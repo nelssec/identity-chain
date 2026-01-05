@@ -298,6 +298,81 @@ idc generate -A --audit-source gcp --gcp-project my-project --since 30d -f roles
 idc unused -A --audit-source cloudwatch --log-group /aws/eks/cluster/cluster
 ```
 
+### `idc remediate` - Auto-Remediation
+
+Generate Kubernetes manifests to fix security findings:
+
+```bash
+idc remediate -A -f fixes.yaml                    # Generate all fix manifests
+idc remediate -A --severity critical              # Only critical fixes
+idc remediate -A --type rbac -f rbac-fixes.yaml   # Only RBAC fixes
+idc remediate -A --manifests-only                 # Just YAML, no summary
+```
+
+Generates ready-to-apply YAML for:
+- RBAC issues (cluster-admin, secrets access, wildcards)
+- Pod security (privileged, hostNetwork, capabilities)
+- Network policies (default-deny, DNS egress)
+
+### `idc check` - Custom Security Checks
+
+Run user-defined security checks from a YAML configuration:
+
+```bash
+idc check -A --config custom-checks.yaml
+idc check -A --config checks.yaml --severity high
+```
+
+Example check configuration:
+```yaml
+checks:
+  - id: CUSTOM001
+    name: "No pods in default namespace"
+    severity: medium
+    match:
+      kind: Workload
+      namespace: default
+    condition:
+      exists: true
+```
+
+See `examples/custom-checks.yaml` for more examples.
+
+### `idc clusters` - Multi-Cluster Management
+
+Manage and scan multiple clusters:
+
+```bash
+idc clusters list                                  # List configured clusters
+idc clusters add --name prod --context prod-ctx    # Add a cluster
+idc clusters remove prod                           # Remove a cluster
+idc clusters scan                                  # Scan all clusters
+```
+
+### `idc history` - Historical Scan Results
+
+View historical scan data:
+
+```bash
+idc history                                        # View all scan history
+idc history --cluster prod --limit 10              # Filter by cluster
+```
+
+### `idc trend` - Security Posture Trends
+
+Analyze security trends over time:
+
+```bash
+idc trend                                          # Compare all clusters
+idc trend --cluster prod --since 30d               # Single cluster trend
+```
+
+Shows:
+- Finding counts over time
+- Critical/High issue trends
+- CIS compliance changes
+- Improving/degrading/stable status
+
 ## Architecture
 
 ```mermaid

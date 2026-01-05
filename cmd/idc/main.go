@@ -9,10 +9,13 @@ import (
 
 	"github.com/nelssec/identity-chain/pkg/analysis"
 	"github.com/nelssec/identity-chain/pkg/audit"
+	"github.com/nelssec/identity-chain/pkg/checks"
 	"github.com/nelssec/identity-chain/pkg/collector"
 	"github.com/nelssec/identity-chain/pkg/collector/cloud"
 	"github.com/nelssec/identity-chain/pkg/graph"
 	"github.com/nelssec/identity-chain/pkg/output"
+	"github.com/nelssec/identity-chain/pkg/remediation"
+	"github.com/nelssec/identity-chain/pkg/store"
 	"github.com/spf13/cobra"
 )
 
@@ -90,6 +93,11 @@ Examples:
 	rootCmd.AddCommand(generateCmd())
 	rootCmd.AddCommand(saLifecycleCmd())
 	rootCmd.AddCommand(sccCmd())
+	rootCmd.AddCommand(remediateCmd())
+	rootCmd.AddCommand(checkCmd())
+	rootCmd.AddCommand(historyCmd())
+	rootCmd.AddCommand(trendCmd())
+	rootCmd.AddCommand(clustersCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -1866,6 +1874,797 @@ Examples:
 			return nil
 		},
 	}
+
+	return cmd
+}
+
+func remediateCmd() *cobra.Command {
+	var outputFile string
+	var minSeverity string
+	var remType string
+	var manifestsOnly bool
+
+	cmd := &cobra.Command{
+		Use:   "remediate",
+		Short: "Generate fix manifests for security findings",
+		Long: `Generate Kubernetes manifests to remediate security findings.
+Creates YAML that can be applied to fix RBAC, pod security, and network policy issues.
+
+Examples:
+  idc remediate -A -f fixes.yaml
+  idc remediate -A --severity critical
+  idc remediate -A --type rbac -f rbac-fixes.yaml
+  idc remediate -A --manifests-only`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			fmt.Fprintln(os.Stderr, "Collecting cluster data...")
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			fmt.Fprintln(os.Stderr, "Running security audits...")
+			rbacResult := analysis.RunRBACAudit(g, analysis.RBACAuditOptions{
+				IncludeSystem: includeSystem,
+			})
+			podSecResult := analysis.RunPodSecurityAudit(g, analysis.PodSecurityOptions{
+				IncludeSystem: includeSystem,
+			})
+			netPolResult := analysis.RunNetworkPolicyAudit(g, analysis.NetworkPolicyOptions{
+				IncludeSystem: includeSystem,
+			})
+
+			var rbacFindings []analysis.RBACFinding
+			var podSecFindings []analysis.PodSecurityFinding
+			var netPolFindings []analysis.NetworkPolicyFinding
+
+			if rbacResult != nil {
+				rbacFindings = rbacResult.Findings
+			}
+			if podSecResult != nil {
+				podSecFindings = podSecResult.Findings
+			}
+			if netPolResult != nil {
+				netPolFindings = netPolResult.Findings
+			}
+
+			fmt.Fprintln(os.Stderr, "Generating remediations...")
+			result := remediation.GenerateAllRemediations(rbacFindings, podSecFindings, netPolFindings)
+
+			if minSeverity != "" {
+				result = remediation.FilterBySeverity(result, minSeverity)
+			}
+
+			if remType != "" {
+				var rt remediation.RemediationType
+				switch remType {
+				case "rbac":
+					rt = remediation.RemediationRBAC
+				case "pod-security", "podsecurity":
+					rt = remediation.RemediationPodSecurity
+				case "network-policy", "networkpolicy":
+					rt = remediation.RemediationNetworkPolicy
+				case "service-account", "serviceaccount":
+					rt = remediation.RemediationServiceAccount
+				default:
+					return fmt.Errorf("unknown remediation type: %s (use: rbac, pod-security, network-policy)", remType)
+				}
+				result = remediation.FilterByType(result, rt)
+			}
+
+			if !allNamespaces && namespace != "default" {
+				result = remediation.FilterByNamespace(result, namespace)
+			}
+
+			var out *os.File
+			if outputFile != "" {
+				out, err = os.Create(outputFile)
+				if err != nil {
+					return fmt.Errorf("failed to create output file: %w", err)
+				}
+				defer out.Close()
+			} else {
+				out = os.Stdout
+			}
+
+			if manifestsOnly {
+				fmt.Fprint(out, result.CombinedManifests)
+				if outputFile != "" {
+					fmt.Fprintf(os.Stderr, "Manifests saved to: %s\n", outputFile)
+				}
+				return nil
+			}
+
+			fmt.Fprintf(os.Stderr, "\n=== Remediation Summary ===\n\n")
+			fmt.Fprintf(os.Stderr, "Total Findings:    %d\n", result.TotalFindings)
+			fmt.Fprintf(os.Stderr, "Remediable:        %d\n", result.RemediableCount)
+			fmt.Fprintf(os.Stderr, "Non-remediable:    %d\n\n", result.NonRemediable)
+
+			bySeverity := make(map[string]int)
+			byType := make(map[remediation.RemediationType]int)
+			for _, r := range result.Remediations {
+				bySeverity[r.Severity]++
+				byType[r.Type]++
+			}
+
+			fmt.Fprintf(os.Stderr, "By Severity:\n")
+			for _, sev := range []string{"critical", "high", "medium", "low"} {
+				if count := bySeverity[sev]; count > 0 {
+					fmt.Fprintf(os.Stderr, "  %-10s %d\n", sev, count)
+				}
+			}
+
+			fmt.Fprintf(os.Stderr, "\nBy Type:\n")
+			for rt, count := range byType {
+				fmt.Fprintf(os.Stderr, "  %-20s %d\n", rt, count)
+			}
+			fmt.Fprintln(os.Stderr)
+
+			fmt.Fprintf(os.Stderr, "REMEDIATIONS\n")
+			fmt.Fprintf(os.Stderr, "%-12s %-10s %-30s %-30s %s\n", "CHECK", "SEVERITY", "RESOURCE", "ACTION", "MANIFESTS")
+			fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("─", 120))
+
+			for _, r := range result.Remediations {
+				resource := fmt.Sprintf("%s/%s", r.Resource.Kind, r.Resource.Name)
+				if r.Resource.Namespace != "" {
+					resource = r.Resource.Namespace + "/" + resource
+				}
+				if len(resource) > 30 {
+					resource = resource[:27] + "..."
+				}
+				action := r.Action
+				if len(action) > 30 {
+					action = action[:27] + "..."
+				}
+				fmt.Fprintf(os.Stderr, "%-12s %-10s %-30s %-30s %d\n",
+					r.CheckID, r.Severity, resource, action, len(r.Manifests))
+			}
+
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(out, result.CombinedManifests)
+
+			if outputFile != "" {
+				fmt.Fprintf(os.Stderr, "Manifests saved to: %s\n", outputFile)
+				fmt.Fprintf(os.Stderr, "\nTo apply: kubectl apply -f %s\n", outputFile)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&outputFile, "output-file", "f", "", "Output file for YAML manifests")
+	cmd.Flags().StringVar(&minSeverity, "severity", "", "Minimum severity to include (critical, high, medium, low)")
+	cmd.Flags().StringVar(&remType, "type", "", "Filter by type (rbac, pod-security, network-policy)")
+	cmd.Flags().BoolVar(&manifestsOnly, "manifests-only", false, "Output only the YAML manifests")
+
+	return cmd
+}
+
+func checkCmd() *cobra.Command {
+	var configFile string
+	var minSeverity string
+
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "Run custom security checks from YAML config",
+		Long: `Run user-defined security checks against the cluster.
+Custom checks are defined in a YAML configuration file.
+
+Examples:
+  idc check -A --config custom-checks.yaml
+  idc check -A --config checks.yaml --severity high
+  idc check -n prod --config prod-checks.yaml`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if configFile == "" {
+				return fmt.Errorf("--config is required")
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			config, err := checks.LoadCustomChecks(configFile)
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "Loaded %d custom checks from %s\n", len(config.Checks), configFile)
+
+			fmt.Fprintln(os.Stderr, "Collecting cluster data...")
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			fmt.Fprintln(os.Stderr, "Running custom checks...")
+			findings := checks.RunCustomChecks(g, config)
+
+			if minSeverity != "" {
+				findings = filterFindingsBySeverity(findings, minSeverity)
+			}
+
+			if len(findings) == 0 {
+				fmt.Println("No findings from custom checks.")
+				return nil
+			}
+
+			fmt.Printf("\n=== Custom Check Results ===\n\n")
+			fmt.Printf("Total Findings: %d\n\n", len(findings))
+
+			bySeverity := make(map[string]int)
+			byCategory := make(map[string]int)
+			for _, f := range findings {
+				bySeverity[f.Severity]++
+				byCategory[f.Category]++
+			}
+
+			fmt.Printf("By Severity:\n")
+			for _, sev := range []string{"critical", "high", "medium", "low"} {
+				if count := bySeverity[sev]; count > 0 {
+					fmt.Printf("  %-10s %d\n", sev, count)
+				}
+			}
+
+			fmt.Printf("\nBy Category:\n")
+			for cat, count := range byCategory {
+				fmt.Printf("  %-20s %d\n", cat, count)
+			}
+
+			fmt.Printf("\nFINDINGS\n")
+			fmt.Printf("%-12s %-10s %-15s %-30s %s\n", "CHECK", "SEVERITY", "CATEGORY", "RESOURCE", "DETAILS")
+			fmt.Printf("%s\n", strings.Repeat("─", 120))
+
+			for _, f := range findings {
+				for _, affected := range f.Affected {
+					resource := affected.Name
+					if affected.Namespace != "" {
+						resource = affected.Namespace + "/" + resource
+					}
+					if len(resource) > 30 {
+						resource = resource[:27] + "..."
+					}
+					details := affected.Details
+					if len(details) > 40 {
+						details = details[:37] + "..."
+					}
+					fmt.Printf("%-12s %-10s %-15s %-30s %s\n",
+						f.CheckID, f.Severity, f.Category, resource, details)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&configFile, "config", "", "Path to custom checks YAML config file")
+	cmd.Flags().StringVar(&minSeverity, "severity", "", "Minimum severity to include (critical, high, medium, low)")
+
+	return cmd
+}
+
+func filterFindingsBySeverity(findings []checks.CustomFinding, minSeverity string) []checks.CustomFinding {
+	severityOrder := map[string]int{
+		"critical": 4,
+		"high":     3,
+		"medium":   2,
+		"low":      1,
+		"info":     0,
+	}
+
+	minLevel := severityOrder[minSeverity]
+	if minLevel == 0 && minSeverity != "info" {
+		minLevel = 2
+	}
+
+	var filtered []checks.CustomFinding
+	for _, f := range findings {
+		if severityOrder[f.Severity] >= minLevel {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered
+}
+
+func historyCmd() *cobra.Command {
+	var clusterName string
+	var limit int
+	var save bool
+	var storeDir string
+
+	cmd := &cobra.Command{
+		Use:   "history",
+		Short: "View historical scan results",
+		Long: `View and manage historical scan results stored locally.
+
+Use --save with other commands (scan, rbac-audit, etc.) to persist results.
+
+Examples:
+  idc history
+  idc history --cluster my-cluster --limit 10
+  idc scan -A --save --cluster-name prod-cluster`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := store.NewStore(storeDir)
+			if err != nil {
+				return fmt.Errorf("failed to initialize store: %w", err)
+			}
+
+			scans, err := s.LoadScans(clusterName, limit)
+			if err != nil {
+				return fmt.Errorf("failed to load scans: %w", err)
+			}
+
+			if len(scans) == 0 {
+				fmt.Println("No scan history found.")
+				fmt.Println("\nTo save scan results, use the --save flag:")
+				fmt.Println("  idc scan -A --save --cluster-name my-cluster")
+				return nil
+			}
+
+			fmt.Printf("=== Scan History ===\n\n")
+			fmt.Printf("%-25s %-20s %-10s %-10s %-10s %s\n",
+				"TIMESTAMP", "CLUSTER", "FINDINGS", "CRITICAL", "HIGH", "CIS%")
+			fmt.Printf("%s\n", strings.Repeat("─", 100))
+
+			for _, scan := range scans {
+				cisScore := "-"
+				if scan.CISCompliance != nil {
+					cisScore = fmt.Sprintf("%.1f%%", scan.CISCompliance.Percentage)
+				}
+				fmt.Printf("%-25s %-20s %-10d %-10d %-10d %s\n",
+					scan.Timestamp.Format("2006-01-02 15:04:05"),
+					truncate(scan.ClusterName, 20),
+					scan.Summary.TotalFindings,
+					scan.Summary.CriticalCount,
+					scan.Summary.HighCount,
+					cisScore)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&clusterName, "cluster", "", "Filter by cluster name")
+	cmd.Flags().IntVar(&limit, "limit", 20, "Maximum number of results")
+	cmd.Flags().BoolVar(&save, "save", false, "Save current scan to history")
+	cmd.Flags().StringVar(&storeDir, "store-dir", "", "Custom store directory (default: ~/.idc)")
+
+	return cmd
+}
+
+func trendCmd() *cobra.Command {
+	var clusterName string
+	var since string
+	var storeDir string
+
+	cmd := &cobra.Command{
+		Use:   "trend",
+		Short: "Show security posture trends over time",
+		Long: `Analyze security posture trends from historical scan data.
+
+Shows how findings and compliance have changed over time.
+
+Examples:
+  idc trend --cluster prod-cluster
+  idc trend --cluster prod-cluster --since 30d
+  idc trend`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := store.NewStore(storeDir)
+			if err != nil {
+				return fmt.Errorf("failed to initialize store: %w", err)
+			}
+
+			duration, err := parseDuration(since)
+			if err != nil {
+				duration = 30 * 24 * time.Hour
+			}
+
+			if clusterName == "" {
+				comparisons, err := s.CompareClusters()
+				if err != nil {
+					return fmt.Errorf("failed to compare clusters: %w", err)
+				}
+
+				if len(comparisons) == 0 {
+					fmt.Println("No scan data found. Run scans with --save to track trends.")
+					return nil
+				}
+
+				fmt.Printf("=== Multi-Cluster Comparison ===\n\n")
+				fmt.Printf("%-25s %-20s %-10s %-10s %-10s %s\n",
+					"CLUSTER", "LAST SCAN", "FINDINGS", "CRITICAL", "HIGH", "CIS%")
+				fmt.Printf("%s\n", strings.Repeat("─", 100))
+
+				for _, c := range comparisons {
+					cisScore := "-"
+					if c.CISCompliance > 0 {
+						cisScore = fmt.Sprintf("%.1f%%", c.CISCompliance)
+					}
+					fmt.Printf("%-25s %-20s %-10d %-10d %-10d %s\n",
+						truncate(c.ClusterName, 25),
+						c.LastScan.Format("2006-01-02 15:04"),
+						c.TotalFindings,
+						c.CriticalCount,
+						c.HighCount,
+						cisScore)
+				}
+				return nil
+			}
+
+			trend, err := s.GetTrend(clusterName, duration)
+			if err != nil {
+				return fmt.Errorf("failed to get trend data: %w", err)
+			}
+
+			if trend == nil || len(trend.DataPoints) == 0 {
+				fmt.Printf("No trend data found for cluster: %s\n", clusterName)
+				return nil
+			}
+
+			fmt.Printf("=== Trend Analysis: %s ===\n\n", clusterName)
+			fmt.Printf("Period: %s to %s (%d scans)\n",
+				trend.TrendSummary.FirstScan.Format("2006-01-02"),
+				trend.TrendSummary.LastScan.Format("2006-01-02"),
+				trend.TrendSummary.TotalScans)
+
+			direction := trend.TrendSummary.TrendDirection
+			switch direction {
+			case "improving":
+				fmt.Printf("Trend: IMPROVING (findings reduced by %d)\n", -trend.TrendSummary.FindingsDelta)
+			case "degrading":
+				fmt.Printf("Trend: DEGRADING (findings increased by %d)\n", trend.TrendSummary.FindingsDelta)
+			default:
+				fmt.Printf("Trend: STABLE\n")
+			}
+
+			if trend.TrendSummary.CriticalDelta != 0 {
+				fmt.Printf("Critical Delta: %+d\n", trend.TrendSummary.CriticalDelta)
+			}
+			if trend.TrendSummary.CISDelta != 0 {
+				fmt.Printf("CIS Delta: %+.1f%%\n", trend.TrendSummary.CISDelta)
+			}
+
+			fmt.Printf("\nDATA POINTS\n")
+			fmt.Printf("%-20s %-10s %-10s %-10s %s\n",
+				"DATE", "FINDINGS", "CRITICAL", "HIGH", "CIS%")
+			fmt.Printf("%s\n", strings.Repeat("─", 70))
+
+			for _, point := range trend.DataPoints {
+				cisScore := "-"
+				if point.CISCompliance > 0 {
+					cisScore = fmt.Sprintf("%.1f%%", point.CISCompliance)
+				}
+				fmt.Printf("%-20s %-10d %-10d %-10d %s\n",
+					point.Timestamp.Format("2006-01-02 15:04"),
+					point.TotalFindings,
+					point.CriticalCount,
+					point.HighCount,
+					cisScore)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&clusterName, "cluster", "", "Cluster name to analyze")
+	cmd.Flags().StringVar(&since, "since", "30d", "Time period to analyze (e.g., 7d, 30d)")
+	cmd.Flags().StringVar(&storeDir, "store-dir", "", "Custom store directory")
+
+	return cmd
+}
+
+func clustersCmd() *cobra.Command {
+	var storeDir string
+
+	cmd := &cobra.Command{
+		Use:   "clusters",
+		Short: "Manage multi-cluster configurations",
+		Long: `Configure and manage multiple clusters for aggregated analysis.
+
+Subcommands:
+  add     - Add a cluster to the configuration
+  list    - List configured clusters
+  remove  - Remove a cluster from configuration
+  scan    - Scan all configured clusters
+
+Examples:
+  idc clusters list
+  idc clusters add --name prod --context prod-context
+  idc clusters scan -A`,
+	}
+
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List configured clusters",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := store.NewStore(storeDir)
+			if err != nil {
+				return err
+			}
+
+			config, err := s.LoadMultiClusterConfig()
+			if err != nil {
+				return err
+			}
+
+			if config == nil || len(config.Clusters) == 0 {
+				fmt.Println("No clusters configured.")
+				fmt.Println("\nAdd clusters with:")
+				fmt.Println("  idc clusters add --name my-cluster --context my-context")
+				return nil
+			}
+
+			fmt.Printf("=== Configured Clusters ===\n\n")
+			fmt.Printf("%-20s %-30s %s\n", "NAME", "CONTEXT", "DESCRIPTION")
+			fmt.Printf("%s\n", strings.Repeat("─", 80))
+
+			for _, c := range config.Clusters {
+				desc := c.Description
+				if len(desc) > 25 {
+					desc = desc[:22] + "..."
+				}
+				fmt.Printf("%-20s %-30s %s\n", c.Name, c.Context, desc)
+			}
+
+			return nil
+		},
+	}
+
+	addCmd := &cobra.Command{
+		Use:   "add",
+		Short: "Add a cluster to configuration",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, _ := cmd.Flags().GetString("name")
+			context, _ := cmd.Flags().GetString("context")
+			desc, _ := cmd.Flags().GetString("description")
+
+			if name == "" || context == "" {
+				return fmt.Errorf("--name and --context are required")
+			}
+
+			s, err := store.NewStore(storeDir)
+			if err != nil {
+				return err
+			}
+
+			config, err := s.LoadMultiClusterConfig()
+			if err != nil {
+				return err
+			}
+			if config == nil {
+				config = &store.MultiClusterConfig{}
+			}
+
+			for _, c := range config.Clusters {
+				if c.Name == name {
+					return fmt.Errorf("cluster %s already exists", name)
+				}
+			}
+
+			config.Clusters = append(config.Clusters, store.ClusterConfig{
+				Name:        name,
+				Context:     context,
+				Description: desc,
+			})
+
+			if err := s.SaveMultiClusterConfig(config); err != nil {
+				return err
+			}
+
+			fmt.Printf("Added cluster: %s (context: %s)\n", name, context)
+			return nil
+		},
+	}
+	addCmd.Flags().String("name", "", "Cluster name")
+	addCmd.Flags().String("context", "", "Kubeconfig context")
+	addCmd.Flags().String("description", "", "Optional description")
+
+	removeCmd := &cobra.Command{
+		Use:   "remove [name]",
+		Short: "Remove a cluster from configuration",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			s, err := store.NewStore(storeDir)
+			if err != nil {
+				return err
+			}
+
+			config, err := s.LoadMultiClusterConfig()
+			if err != nil {
+				return err
+			}
+			if config == nil {
+				return fmt.Errorf("no clusters configured")
+			}
+
+			var newClusters []store.ClusterConfig
+			found := false
+			for _, c := range config.Clusters {
+				if c.Name == name {
+					found = true
+				} else {
+					newClusters = append(newClusters, c)
+				}
+			}
+
+			if !found {
+				return fmt.Errorf("cluster %s not found", name)
+			}
+
+			config.Clusters = newClusters
+			if err := s.SaveMultiClusterConfig(config); err != nil {
+				return err
+			}
+
+			fmt.Printf("Removed cluster: %s\n", name)
+			return nil
+		},
+	}
+
+	scanAllCmd := &cobra.Command{
+		Use:   "scan",
+		Short: "Scan all configured clusters",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := store.NewStore(storeDir)
+			if err != nil {
+				return err
+			}
+
+			config, err := s.LoadMultiClusterConfig()
+			if err != nil {
+				return err
+			}
+			if config == nil || len(config.Clusters) == 0 {
+				return fmt.Errorf("no clusters configured")
+			}
+
+			fmt.Printf("Scanning %d clusters...\n\n", len(config.Clusters))
+
+			for _, cluster := range config.Clusters {
+				fmt.Printf("=== Scanning: %s ===\n", cluster.Name)
+
+				kubecontext = cluster.Context
+				if cluster.KubeConfig != "" {
+					kubeconfig = cluster.KubeConfig
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+				g, err := collectGraph(ctx)
+				cancel()
+
+				if err != nil {
+					fmt.Printf("  Error: %v\n\n", err)
+					continue
+				}
+
+				rbacResult := analysis.RunRBACAudit(g, analysis.RBACAuditOptions{})
+				podSecResult := analysis.RunPodSecurityAudit(g, analysis.PodSecurityOptions{})
+				netPolResult := analysis.RunNetworkPolicyAudit(g, analysis.NetworkPolicyOptions{})
+
+				var rbacFindings, podSecFindings, netPolFindings []analysis.RBACFinding
+				var podFindings []analysis.PodSecurityFinding
+				var netFindings []analysis.NetworkPolicyFinding
+				if rbacResult != nil {
+					rbacFindings = rbacResult.Findings
+				}
+				if podSecResult != nil {
+					podFindings = podSecResult.Findings
+				}
+				if netPolResult != nil {
+					netFindings = netPolResult.Findings
+				}
+
+				cisCompliance := analysis.GenerateCISComplianceSummary(rbacFindings, podFindings, netFindings)
+
+				stats := g.Stats()
+				totalFindings := len(rbacFindings) + len(podFindings) + len(netFindings)
+
+				critical, high, medium, low := 0, 0, 0, 0
+				for _, f := range rbacFindings {
+					switch f.Severity {
+					case "critical":
+						critical++
+					case "high":
+						high++
+					case "medium":
+						medium++
+					case "low":
+						low++
+					}
+				}
+				for _, f := range podFindings {
+					switch f.Severity {
+					case "critical":
+						critical++
+					case "high":
+						high++
+					case "medium":
+						medium++
+					case "low":
+						low++
+					}
+				}
+				for _, f := range netFindings {
+					switch f.Severity {
+					case "critical":
+						critical++
+					case "high":
+						high++
+					case "medium":
+						medium++
+					case "low":
+						low++
+					}
+				}
+
+				result := &store.ScanResult{
+					Timestamp:    time.Now(),
+					ClusterName:  cluster.Name,
+					Context:      cluster.Context,
+					RBACFindings: len(rbacFindings),
+					PodSecFindings: len(podFindings),
+					NetPolFindings: len(netFindings),
+					Summary: store.ScanSummary{
+						TotalWorkloads:       stats.NodeCounts[graph.NodeWorkload],
+						TotalServiceAccounts: stats.NodeCounts[graph.NodeServiceAccount],
+						TotalRoles:           stats.NodeCounts[graph.NodeRole],
+						TotalFindings:        totalFindings,
+						CriticalCount:        critical,
+						HighCount:            high,
+						MediumCount:          medium,
+						LowCount:             low,
+						FindingsBySeverity: map[string]int{
+							"critical": critical,
+							"high":     high,
+							"medium":   medium,
+							"low":      low,
+						},
+					},
+				}
+
+				if cisCompliance != nil {
+					result.CISCompliance = &store.CISComplianceScore{
+						TotalControls:  cisCompliance.TotalControls,
+						PassedControls: cisCompliance.PassedControls,
+						FailedControls: cisCompliance.FailedControls,
+						Percentage:     float64(cisCompliance.PassedControls) / float64(cisCompliance.TotalControls) * 100,
+					}
+				}
+
+				if err := s.SaveScan(result); err != nil {
+					fmt.Printf("  Warning: Failed to save results: %v\n", err)
+				}
+
+				fmt.Printf("  Workloads: %d, SAs: %d, Roles: %d\n",
+					result.Summary.TotalWorkloads,
+					result.Summary.TotalServiceAccounts,
+					result.Summary.TotalRoles)
+				fmt.Printf("  Findings: %d (C:%d H:%d M:%d L:%d)\n",
+					totalFindings, critical, high, medium, low)
+				if result.CISCompliance != nil {
+					fmt.Printf("  CIS Compliance: %.1f%%\n", result.CISCompliance.Percentage)
+				}
+				fmt.Println()
+				_ = podSecFindings
+				_ = netPolFindings
+			}
+
+			fmt.Println("Multi-cluster scan complete. View results with:")
+			fmt.Println("  idc trend")
+			fmt.Println("  idc history")
+
+			return nil
+		},
+	}
+
+	cmd.AddCommand(listCmd)
+	cmd.AddCommand(addCmd)
+	cmd.AddCommand(removeCmd)
+	cmd.AddCommand(scanAllCmd)
+
+	cmd.PersistentFlags().StringVar(&storeDir, "store-dir", "", "Custom store directory")
 
 	return cmd
 }

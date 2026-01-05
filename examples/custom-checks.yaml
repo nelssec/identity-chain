@@ -1,0 +1,121 @@
+checks:
+  - id: CUSTOM001
+    name: "No pods in default namespace"
+    description: "Workloads should not run in the default namespace for security isolation"
+    severity: medium
+    category: best-practices
+    remediation: "Move workloads to dedicated namespaces"
+    match:
+      kind: Workload
+      namespace: default
+    condition:
+      exists: true
+
+  - id: CUSTOM002
+    name: "ServiceAccount missing owner annotation"
+    description: "ServiceAccounts should have an owner annotation for accountability"
+    severity: low
+    category: governance
+    remediation: "Add 'owner' annotation to the ServiceAccount"
+    match:
+      kind: ServiceAccount
+    condition:
+      missingAnnotation: "owner"
+
+  - id: CUSTOM003
+    name: "Privileged containers in production"
+    description: "Production namespaces should not have privileged containers"
+    severity: critical
+    category: security
+    remediation: "Remove privileged: true from container security context"
+    match:
+      kind: Workload
+      namespacePattern: "^prod.*"
+    condition:
+      hasSecurityContext:
+        privileged: true
+
+  - id: CUSTOM004
+    name: "Missing runAsNonRoot"
+    description: "Containers should explicitly set runAsNonRoot: true"
+    severity: medium
+    category: security
+    remediation: "Add runAsNonRoot: true to pod or container security context"
+    match:
+      kind: Workload
+    condition:
+      missingSecurityField: "runAsNonRoot"
+
+  - id: CUSTOM005
+    name: "ServiceAccount with cluster-admin binding"
+    description: "ServiceAccounts bound to cluster-admin role should be reviewed"
+    severity: critical
+    category: rbac
+    remediation: "Review if cluster-admin access is necessary; use least-privilege roles"
+    match:
+      kind: ServiceAccount
+    condition:
+      bindsToRole: "cluster-admin"
+
+  - id: CUSTOM006
+    name: "ServiceAccount without RBAC bindings"
+    description: "ServiceAccounts should have explicit RBAC bindings"
+    severity: low
+    category: governance
+    remediation: "Add appropriate RoleBinding or ClusterRoleBinding"
+    match:
+      kind: ServiceAccount
+    condition:
+      hasRBACBinding: false
+
+  - id: CUSTOM007
+    name: "Missing environment label"
+    description: "Workloads should have an environment label for filtering"
+    severity: low
+    category: governance
+    remediation: "Add 'environment' label (e.g., dev, staging, prod)"
+    match:
+      kind: Workload
+    condition:
+      missingLabel: "environment"
+
+  - id: CUSTOM008
+    name: "Host network in non-system namespace"
+    description: "Host network should only be used in system namespaces"
+    severity: high
+    category: security
+    remediation: "Remove hostNetwork: true unless absolutely required"
+    match:
+      kind: Workload
+      namespacePattern: "^(?!kube-)"
+    condition:
+      hasSecurityContext:
+        hostNetwork: true
+
+  - id: CUSTOM009
+    name: "ServiceAccount with cloud identity but no workload"
+    description: "ServiceAccounts with cloud identity should be used by workloads"
+    severity: medium
+    category: governance
+    remediation: "Review if cloud identity is still needed; remove if unused"
+    match:
+      kind: ServiceAccount
+    condition:
+      and:
+        - hasCloudIdentity: true
+        - hasRBACBinding: false
+
+  - id: CUSTOM010
+    name: "Dangerous capabilities"
+    description: "Containers should not have SYS_ADMIN or NET_ADMIN capabilities"
+    severity: critical
+    category: security
+    remediation: "Remove dangerous capabilities from container security context"
+    match:
+      kind: Workload
+    condition:
+      or:
+        - hasSecurityContext:
+            hasCapability: ["SYS_ADMIN"]
+        - hasSecurityContext:
+            hasCapability: ["NET_ADMIN"]
