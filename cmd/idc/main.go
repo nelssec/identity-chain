@@ -16,6 +16,7 @@ import (
 	"github.com/nelssec/identity-chain/pkg/output"
 	"github.com/nelssec/identity-chain/pkg/remediation"
 	"github.com/nelssec/identity-chain/pkg/store"
+	"github.com/nelssec/identity-chain/pkg/watch"
 	"github.com/spf13/cobra"
 )
 
@@ -98,6 +99,7 @@ Examples:
 	rootCmd.AddCommand(historyCmd())
 	rootCmd.AddCommand(trendCmd())
 	rootCmd.AddCommand(clustersCmd())
+	rootCmd.AddCommand(watchCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -2665,6 +2667,70 @@ Examples:
 	cmd.AddCommand(scanAllCmd)
 
 	cmd.PersistentFlags().StringVar(&storeDir, "store-dir", "", "Custom store directory")
+
+	return cmd
+}
+
+func watchCmd() *cobra.Command {
+	var metricsAddr string
+	var webhookURL string
+	var resyncPeriod string
+	var debouncePeriod string
+	var maxMemoryMB int
+
+	cmd := &cobra.Command{
+		Use:   "watch",
+		Short: "Continuously watch for identity and RBAC changes",
+		Long: `Run as a long-lived process that watches for changes to RBAC,
+ServiceAccounts, and workloads. Provides real-time analysis with
+Prometheus metrics and webhook notifications.
+
+Deploy as a Kubernetes Deployment for continuous monitoring.
+
+Examples:
+  idc watch -A
+  idc watch -A --metrics-addr :8080
+  idc watch -A --webhook-url https://hooks.slack.com/...
+  idc watch -A --resync-period 5m --debounce 30s --max-memory 256`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resync, err := time.ParseDuration(resyncPeriod)
+			if err != nil {
+				return fmt.Errorf("invalid resync-period: %w", err)
+			}
+
+			debounce, err := time.ParseDuration(debouncePeriod)
+			if err != nil {
+				return fmt.Errorf("invalid debounce: %w", err)
+			}
+
+			config := watch.Config{
+				Kubeconfig:     kubeconfig,
+				Context:        kubecontext,
+				AllNamespaces:  allNamespaces,
+				Namespace:      namespace,
+				IncludeSystem:  includeSystem,
+				ResyncPeriod:   resync,
+				DebouncePeriod: debounce,
+				MaxMemoryMB:    maxMemoryMB,
+				MetricsAddr:    metricsAddr,
+				WebhookURL:     webhookURL,
+			}
+
+			watcher, err := watch.New(config)
+			if err != nil {
+				return fmt.Errorf("failed to create watcher: %w", err)
+			}
+
+			ctx := context.Background()
+			return watcher.Run(ctx)
+		},
+	}
+
+	cmd.Flags().StringVar(&metricsAddr, "metrics-addr", "", "Address for Prometheus metrics endpoint (e.g., :8080)")
+	cmd.Flags().StringVar(&webhookURL, "webhook-url", "", "Webhook URL for notifications (JSON or Slack)")
+	cmd.Flags().StringVar(&resyncPeriod, "resync-period", "5m", "How often to fully resync with the API server")
+	cmd.Flags().StringVar(&debouncePeriod, "debounce", "30s", "Wait time after changes before re-analyzing")
+	cmd.Flags().IntVar(&maxMemoryMB, "max-memory", 0, "Maximum memory limit in MB (0 = no limit)")
 
 	return cmd
 }
