@@ -13,6 +13,7 @@ const (
 	NodeCloudResource  NodeType = "cloud_resource"
 	NodeNetworkPolicy  NodeType = "network_policy"
 	NodeService        NodeType = "service"
+	NodeSCC            NodeType = "scc"
 )
 
 type Node struct {
@@ -43,6 +44,30 @@ type NodeMetadata struct {
 	PodSecurityContext *PodSecurityContext `json:"pod_security_context,omitempty"`
 	NetworkPolicy      *NetworkPolicyInfo  `json:"network_policy,omitempty"`
 	ServiceInfo        *ServiceInfo        `json:"service_info,omitempty"`
+	SCCInfo            *SCCInfo            `json:"scc_info,omitempty"`
+}
+
+type SCCInfo struct {
+	Priority                 int      `json:"priority,omitempty"`
+	AllowPrivilegedContainer bool     `json:"allow_privileged_container,omitempty"`
+	AllowHostDirVolumePlugin bool     `json:"allow_host_dir_volume_plugin,omitempty"`
+	AllowHostNetwork         bool     `json:"allow_host_network,omitempty"`
+	AllowHostPorts           bool     `json:"allow_host_ports,omitempty"`
+	AllowHostPID             bool     `json:"allow_host_pid,omitempty"`
+	AllowHostIPC             bool     `json:"allow_host_ipc,omitempty"`
+	AllowedCapabilities      []string `json:"allowed_capabilities,omitempty"`
+	DefaultAddCapabilities   []string `json:"default_add_capabilities,omitempty"`
+	RequiredDropCapabilities []string `json:"required_drop_capabilities,omitempty"`
+	ReadOnlyRootFilesystem   bool     `json:"read_only_root_filesystem,omitempty"`
+	RunAsUserType            string   `json:"run_as_user_type,omitempty"`
+	SELinuxContextType       string   `json:"selinux_context_type,omitempty"`
+	FSGroupType              string   `json:"fsgroup_type,omitempty"`
+	SupplementalGroupsType   string   `json:"supplemental_groups_type,omitempty"`
+	Volumes                  []string `json:"volumes,omitempty"`
+	Users                    []string `json:"users,omitempty"`
+	Groups                   []string `json:"groups,omitempty"`
+	SeccompProfiles          []string `json:"seccomp_profiles,omitempty"`
+	AllowPrivilegeEscalation *bool    `json:"allow_privilege_escalation,omitempty"`
 }
 
 type NetworkPolicyInfo struct {

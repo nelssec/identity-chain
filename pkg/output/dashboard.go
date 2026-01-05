@@ -10,38 +10,39 @@ import (
 	"strings"
 
 	"github.com/nelssec/identity-chain/pkg/analysis"
+	"github.com/nelssec/identity-chain/pkg/audit"
 	"github.com/nelssec/identity-chain/pkg/graph"
 )
 
 //go:embed assets/logo.png
 var logoPNG []byte
 
-// DashboardData contains all data for the unified dashboard
 type DashboardData struct {
-	BlastResults  []*analysis.BlastResult
-	AttackPaths   []*analysis.AttackPathResult
-	RBACAudit     *analysis.RBACAuditResult
-	PodSecurity   *analysis.PodSecurityResult
-	NetworkPolicy *analysis.NetworkPolicyResult
-	CloudAudit    *analysis.CloudIAMAuditResult
-	Permissions   *PermissionsData
-	GraphStats    graph.GraphStats
-	Graph         *graph.Graph // For D3 visualization
+	BlastResults      []*analysis.BlastResult
+	AttackPaths       []*analysis.AttackPathResult
+	RBACAudit         *analysis.RBACAuditResult
+	PodSecurity       *analysis.PodSecurityResult
+	NetworkPolicy     *analysis.NetworkPolicyResult
+	CloudAudit        *analysis.CloudIAMAuditResult
+	Permissions       *PermissionsData
+	UnusedPermissions []audit.UnusedPermission
+	SCCAnalysis       *analysis.SCCAnalysisResult
+	CISCompliance     *analysis.CISComplianceSummary
+	GraphStats        graph.GraphStats
+	Graph             *graph.Graph
 }
 
-// PermissionsData holds results from WhoCan queries
 type PermissionsData struct {
-	SecretAccess    []*analysis.WhoCanResult // Who can get/list secrets
-	PodExec         []*analysis.WhoCanResult // Who can exec into pods
-	PodCreate       []*analysis.WhoCanResult // Who can create pods
-	PodDelete       []*analysis.WhoCanResult // Who can delete pods
-	ClusterAdmin    []*analysis.WhoCanResult // Who has cluster-admin like permissions
-	RoleBindings    []*analysis.WhoCanResult // Who can create rolebindings
-	Impersonate     []*analysis.WhoCanResult // Who can impersonate
-	DangerousPerms  []DangerousPermission    // Summary of dangerous permissions
+	SecretAccess   []*analysis.WhoCanResult
+	PodExec        []*analysis.WhoCanResult
+	PodCreate      []*analysis.WhoCanResult
+	PodDelete      []*analysis.WhoCanResult
+	ClusterAdmin   []*analysis.WhoCanResult
+	RoleBindings   []*analysis.WhoCanResult
+	Impersonate    []*analysis.WhoCanResult
+	DangerousPerms []DangerousPermission
 }
 
-// DangerousPermission represents a subject with dangerous access
 type DangerousPermission struct {
 	Subject     string
 	SubjectKind string
@@ -51,17 +52,13 @@ type DangerousPermission struct {
 	Details     string
 }
 
-// Dashboard generates unified security dashboards
 type Dashboard struct {
 	w io.Writer
 }
 
-// NewDashboard creates a new dashboard generator
 func NewDashboard(w io.Writer) *Dashboard {
 	return &Dashboard{w: w}
 }
-
-// Generate creates the unified HTML dashboard
 func (d *Dashboard) Generate(data DashboardData) error {
 	// Build JSON data for each section
 	dashData := d.buildDashboardData(data)
@@ -97,7 +94,95 @@ type dashboardJSON struct {
 	PodSecurity   podSecurityData    `json:"podSecurity"`
 	NetworkPolicy networkPolicyData  `json:"networkPolicy"`
 	CloudAudit    cloudAuditData     `json:"cloudAudit"`
+	UnusedPerms   unusedPermsData    `json:"unusedPerms"`
+	SCCData       sccJSONData        `json:"sccData"`
+	CISCompliance cisComplianceData  `json:"cisCompliance"`
 	GraphData     graphVisualization `json:"graphData"`
+}
+
+type cisComplianceData struct {
+	TotalControls   int                 `json:"totalControls"`
+	PassedControls  int                 `json:"passedControls"`
+	FailedControls  int                 `json:"failedControls"`
+	ComplianceScore float64             `json:"complianceScore"`
+	FailedBySection map[string]int      `json:"failedBySection"`
+	Controls        []cisControlStatus  `json:"controls"`
+}
+
+type cisControlStatus struct {
+	ID          string `json:"id"`
+	Section     string `json:"section"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	Level       int    `json:"level"`
+}
+
+type sccJSONData struct {
+	SCCs            []sccDetailJSON      `json:"sccs"`
+	RiskyBindings   []sccBindingJSON     `json:"riskyBindings"`
+	EscalationPaths []sccEscPathJSON     `json:"escalationPaths"`
+	Summary         sccSummaryJSON       `json:"summary"`
+	IsOpenShift     bool                 `json:"isOpenShift"`
+}
+
+type sccDetailJSON struct {
+	Name         string   `json:"name"`
+	Priority     int      `json:"priority"`
+	RiskLevel    string   `json:"riskLevel"`
+	RiskScore    int      `json:"riskScore"`
+	AllowedFlags []string `json:"allowedFlags"`
+	Restrictions []string `json:"restrictions"`
+	Users        []string `json:"users"`
+	Groups       []string `json:"groups"`
+}
+
+type sccBindingJSON struct {
+	SCCName     string   `json:"sccName"`
+	SubjectType string   `json:"subjectType"`
+	SubjectName string   `json:"subjectName"`
+	SubjectNS   string   `json:"subjectNS"`
+	RiskLevel   string   `json:"riskLevel"`
+	RiskReason  string   `json:"riskReason"`
+}
+
+type sccEscPathJSON struct {
+	Source      string `json:"source"`
+	SourceType  string `json:"sourceType"`
+	TargetSCC   string `json:"targetSCC"`
+	Via         string `json:"via"`
+	RiskLevel   string `json:"riskLevel"`
+	Description string `json:"description"`
+}
+
+type sccSummaryJSON struct {
+	TotalSCCs        int `json:"totalSccs"`
+	PrivilegedSCCs   int `json:"privilegedSccs"`
+	TotalBindings    int `json:"totalBindings"`
+	RiskyBindings    int `json:"riskyBindings"`
+	EscalationPaths  int `json:"escalationPaths"`
+}
+
+type unusedPermsData struct {
+	Permissions []unusedPermJSON `json:"permissions"`
+	Summary     unusedSummary    `json:"summary"`
+}
+
+type unusedPermJSON struct {
+	ServiceAccount string `json:"serviceAccount"`
+	Namespace      string `json:"namespace"`
+	Resource       string `json:"resource"`
+	Verb           string `json:"verb"`
+	ViaRole        string `json:"viaRole"`
+	NeverUsed      bool   `json:"neverUsed"`
+	LastUsed       string `json:"lastUsed"`
+	DaysSinceUse   int    `json:"daysSinceUse"`
+}
+
+type unusedSummary struct {
+	TotalUnused      int `json:"totalUnused"`
+	NeverUsedCount   int `json:"neverUsedCount"`
+	StaleCount       int `json:"staleCount"`
+	AffectedAccounts int `json:"affectedAccounts"`
 }
 
 type permissionsJSON struct {
@@ -259,6 +344,7 @@ type rbacFinding struct {
 	Description string         `json:"description"`
 	Affected    []affectedItem `json:"affected"`
 	Remediation string         `json:"remediation"`
+	CISControls []string       `json:"cisControls"`
 }
 
 type affectedItem struct {
@@ -288,9 +374,12 @@ type podSecFinding struct {
 	Workload    string         `json:"workload"`
 	Namespace   string         `json:"namespace"`
 	Container   string         `json:"container"`
+	Description string         `json:"description"`
 	Details     string         `json:"details"`
 	Affected    []affectedItem `json:"affected"`
 	Remediation string         `json:"remediation"`
+	Category    string         `json:"category"`
+	CISControls []string       `json:"cisControls"`
 }
 
 type podSecSummary struct {
@@ -318,13 +407,14 @@ type suggestedPolicy struct {
 }
 
 type netPolFinding struct {
-	CheckID   string         `json:"checkId"`
-	CheckName string         `json:"checkName"`
-	Severity  string         `json:"severity"`
-	Workload  string         `json:"workload"`
-	Namespace string         `json:"namespace"`
-	Details   string         `json:"details"`
-	Affected  []affectedItem `json:"affected"`
+	CheckID     string         `json:"checkId"`
+	CheckName   string         `json:"checkName"`
+	Severity    string         `json:"severity"`
+	Workload    string         `json:"workload"`
+	Namespace   string         `json:"namespace"`
+	Details     string         `json:"details"`
+	Affected    []affectedItem `json:"affected"`
+	CISControls []string       `json:"cisControls"`
 }
 
 type netPolSummary struct {
@@ -622,6 +712,7 @@ func (d *Dashboard) buildDashboardData(data DashboardData) dashboardJSON {
 				Severity:    string(f.Severity),
 				Description: f.Description,
 				Remediation: f.Remediation,
+				CISControls: analysis.GetCISIDsForCheck(f.CheckID),
 			}
 			if len(f.Affected) > 0 {
 				finding.Subject = f.Affected[0].Name
@@ -653,16 +744,16 @@ func (d *Dashboard) buildDashboardData(data DashboardData) dashboardJSON {
 				CheckID:     f.CheckID,
 				CheckName:   f.Title,
 				Severity:    string(f.Severity),
-				Details:     f.Description,
+				Description: f.Description,
 				Remediation: f.Remediation,
+				Category:    f.Category,
+				CISControls: analysis.GetCISIDsForCheck(f.CheckID),
 			}
 			if len(f.Affected) > 0 {
 				finding.Workload = f.Affected[0].Name
 				finding.Namespace = f.Affected[0].Namespace
 				finding.Container = f.Affected[0].Container
-				if f.Affected[0].Details != "" {
-					finding.Details = f.Affected[0].Details
-				}
+				finding.Details = f.Affected[0].Details
 			}
 			for _, aff := range f.Affected {
 				finding.Affected = append(finding.Affected, affectedItem{
@@ -685,10 +776,11 @@ func (d *Dashboard) buildDashboardData(data DashboardData) dashboardJSON {
 		}
 		for _, f := range data.NetworkPolicy.Findings {
 			finding := netPolFinding{
-				CheckID:   f.CheckID,
-				CheckName: f.Title,
-				Severity:  string(f.Severity),
-				Details:   f.Description,
+				CheckID:     f.CheckID,
+				CheckName:   f.Title,
+				Severity:    string(f.Severity),
+				Details:     f.Description,
+				CISControls: analysis.GetCISIDsForCheck(f.CheckID),
 			}
 			if len(f.Affected) > 0 {
 				finding.Workload = f.Affected[0].Name
@@ -751,7 +843,42 @@ func (d *Dashboard) buildDashboardData(data DashboardData) dashboardJSON {
 		}
 	}
 
-	// Build graph visualization data
+	if len(data.UnusedPermissions) > 0 {
+		affectedAccounts := make(map[string]bool)
+		neverUsed := 0
+		stale := 0
+
+		for _, u := range data.UnusedPermissions {
+			perm := unusedPermJSON{
+				ServiceAccount: u.ServiceAccount,
+				Namespace:      u.Namespace,
+				Resource:       u.Resource,
+				Verb:           u.Verb,
+				ViaRole:        u.ViaRole,
+				NeverUsed:      u.NeverUsed,
+				DaysSinceUse:   u.DaysSinceUse,
+			}
+			if !u.LastUsed.IsZero() {
+				perm.LastUsed = u.LastUsed.Format("2006-01-02")
+			}
+			result.UnusedPerms.Permissions = append(result.UnusedPerms.Permissions, perm)
+
+			affectedAccounts[u.ServiceAccount] = true
+			if u.NeverUsed {
+				neverUsed++
+			} else {
+				stale++
+			}
+		}
+
+		result.UnusedPerms.Summary = unusedSummary{
+			TotalUnused:      len(data.UnusedPermissions),
+			NeverUsedCount:   neverUsed,
+			StaleCount:       stale,
+			AffectedAccounts: len(affectedAccounts),
+		}
+	}
+
 	if data.Graph != nil {
 		nodeSet := make(map[string]bool)
 
@@ -890,6 +1017,79 @@ func (d *Dashboard) buildDashboardData(data DashboardData) dashboardJSON {
 			PodExecUsers:    podExecUsers,
 			ClusterAdmins:   clusterAdmins,
 		}
+	}
+
+	if data.SCCAnalysis != nil && len(data.SCCAnalysis.SCCs) > 0 {
+		result.SCCData.IsOpenShift = true
+
+		for _, scc := range data.SCCAnalysis.SCCs {
+			result.SCCData.SCCs = append(result.SCCData.SCCs, sccDetailJSON{
+				Name:         scc.Name,
+				Priority:     scc.Priority,
+				RiskLevel:    scc.RiskLevel,
+				RiskScore:    scc.RiskScore,
+				AllowedFlags: scc.AllowedFlags,
+				Restrictions: scc.Restrictions,
+				Users:        scc.Users,
+				Groups:       scc.Groups,
+			})
+		}
+
+		for _, rb := range data.SCCAnalysis.RiskyBindings {
+			result.SCCData.RiskyBindings = append(result.SCCData.RiskyBindings, sccBindingJSON{
+				SCCName:     rb.SCCName,
+				SubjectType: rb.SubjectType,
+				SubjectName: rb.SubjectName,
+				SubjectNS:   rb.SubjectNS,
+				RiskLevel:   rb.RiskLevel,
+				RiskReason:  rb.RiskReason,
+			})
+		}
+
+		for _, ep := range data.SCCAnalysis.EscalationPaths {
+			result.SCCData.EscalationPaths = append(result.SCCData.EscalationPaths, sccEscPathJSON{
+				Source:      ep.Source,
+				SourceType:  ep.SourceType,
+				TargetSCC:   ep.TargetSCC,
+				Via:         ep.Via,
+				RiskLevel:   ep.RiskLevel,
+				Description: ep.Description,
+			})
+		}
+
+		result.SCCData.Summary = sccSummaryJSON{
+			TotalSCCs:       data.SCCAnalysis.Summary.TotalSCCs,
+			PrivilegedSCCs:  data.SCCAnalysis.Summary.PrivilegedSCCs,
+			TotalBindings:   data.SCCAnalysis.Summary.TotalBindings,
+			RiskyBindings:   data.SCCAnalysis.Summary.RiskyBindings,
+			EscalationPaths: data.SCCAnalysis.Summary.EscalationPaths,
+		}
+	}
+
+	if data.CISCompliance != nil {
+		result.CISCompliance.TotalControls = data.CISCompliance.TotalControls
+		result.CISCompliance.PassedControls = data.CISCompliance.PassedControls
+		result.CISCompliance.FailedControls = data.CISCompliance.FailedControls
+		if data.CISCompliance.TotalControls > 0 {
+			result.CISCompliance.ComplianceScore = float64(data.CISCompliance.PassedControls) / float64(data.CISCompliance.TotalControls) * 100
+		}
+		result.CISCompliance.FailedBySection = data.CISCompliance.FailedBySection
+
+		for cisID, status := range data.CISCompliance.ControlStatus {
+			if control, ok := analysis.CISBenchmarkV18[cisID]; ok {
+				result.CISCompliance.Controls = append(result.CISCompliance.Controls, cisControlStatus{
+					ID:      cisID,
+					Section: control.Section,
+					Title:   control.Title,
+					Status:  status,
+					Level:   control.Level,
+				})
+			}
+		}
+
+		sort.Slice(result.CISCompliance.Controls, func(i, j int) bool {
+			return result.CISCompliance.Controls[i].ID < result.CISCompliance.Controls[j].ID
+		})
 	}
 
 	return result
@@ -1590,11 +1790,13 @@ const dashboardHTMLTemplate = `<!DOCTYPE html>
       <button class="tab" data-panel="podsec" onclick="showPanel('podsec')">Pod Security</button>
       <button class="tab" data-panel="netpol" onclick="showPanel('netpol')">Network Policy</button>
       <button class="tab" data-panel="cloud" onclick="showPanel('cloud')">Cloud IAM</button>
+      <button class="tab" data-panel="unused" onclick="showPanel('unused')">Unused Perms</button>
     </div>
 
     <div id="panel-overview" class="panel active"></div>
     <div id="panel-blast" class="panel"></div>
     <div id="panel-attack" class="panel"></div>
+    <div id="panel-unused" class="panel"></div>
     <div id="panel-permissions" class="panel"></div>
     <div id="panel-rbac" class="panel"></div>
     <div id="panel-podsec" class="panel"></div>
@@ -1616,6 +1818,14 @@ const dashboardHTMLTemplate = `<!DOCTYPE html>
   <script>
 const data = %s;
 let currentFilter = 'all';
+
+// HTML escape function to prevent XSS
+function e(text) {
+  if (text === null || text === undefined) return '';
+  const div = document.createElement('div');
+  div.textContent = String(text);
+  return div.innerHTML;
+}
 
 function showPanel(name) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -1717,6 +1927,7 @@ function renderOverview() {
   html += '<div class="chart-row">';
   html += '<div class="chart-card"><div class="chart-title">Severity Distribution</div><div class="chart-container" id="severity-chart"></div></div>';
   html += '<div class="chart-card"><div class="chart-title">Category Breakdown</div><div class="chart-container" id="category-chart"></div></div>';
+  html += '<div class="chart-card"><div class="chart-title">CIS Benchmark v1.8</div><div class="chart-container" id="cis-chart"></div></div>';
   html += '<div class="chart-card"><div class="chart-title">Risk Score</div><div class="chart-container" id="risk-chart"></div></div>';
   html += '</div>';
 
@@ -1770,11 +1981,11 @@ function renderOverview() {
     sorted.slice(0, 10).forEach((f, idx) => {
       html += '<div class="risk-card" onclick="' + f.onClick + '(' + idx + ', ' + JSON.stringify(f).replace(/"/g, '&quot;') + ')">';
       html += '<div class="risk-card-header">';
-      html += '<div><div class="risk-card-title">' + (f.checkName || f.workload || 'Finding') + '</div>';
-      html += '<div class="risk-card-type">' + f.type + ' • ' + (f.namespace || '') + '</div></div>';
+      html += '<div><div class="risk-card-title">' + e(f.checkName || f.workload || 'Finding') + '</div>';
+      html += '<div class="risk-card-type">' + e(f.type) + ' • ' + e(f.namespace || '') + '</div></div>';
       html += '<span class="mini-badge ' + f.severity + '">' + f.severity + '</span>';
       html += '</div>';
-      html += '<div class="risk-card-desc">' + (f.description || '') + '</div>';
+      html += '<div class="risk-card-desc">' + e(f.description || '') + '</div>';
       html += '<div class="risk-meter"><div class="risk-meter-fill ' + f.severity + '" style="width: ' + (f.severity === 'critical' ? '100' : f.severity === 'high' ? '75' : f.severity === 'medium' ? '50' : '25') + '%%"></div></div>';
       html += '</div>';
     });
@@ -1828,6 +2039,38 @@ function renderOverview() {
       catContainer.innerHTML = catHtml;
     }
 
+    // CIS Benchmark compliance gauge
+    const cisContainer = document.getElementById('cis-chart');
+    if (cisContainer && data.cisCompliance) {
+      const cis = data.cisCompliance;
+      const score = Math.round(cis.complianceScore || 0);
+      const passed = cis.passedControls || 0;
+      const failed = cis.failedControls || 0;
+      const total = cis.totalControls || 0;
+      const scoreColor = score >= 80 ? '#3fb950' : score >= 60 ? '#d29922' : score >= 40 ? '#f0883e' : '#f85149';
+      const circumference = 2 * Math.PI * 70;
+      const offset = circumference - (score / 100) * circumference;
+      const glowColor = score >= 80 ? 'rgba(63,185,80,0.4)' : score >= 60 ? 'rgba(210,153,34,0.4)' : score >= 40 ? 'rgba(240,136,62,0.4)' : 'rgba(248,81,73,0.4)';
+
+      cisContainer.innerHTML = '<div style="text-align:center;position:relative">' +
+        '<svg width="160" height="160" viewBox="0 0 180 180" style="transform:rotate(-90deg)">' +
+        '<circle cx="90" cy="90" r="70" fill="none" stroke="rgba(48,54,61,0.5)" stroke-width="10"/>' +
+        '<circle cx="90" cy="90" r="70" fill="none" stroke="' + scoreColor + '" stroke-width="10" ' +
+        'stroke-dasharray="' + circumference + '" stroke-dashoffset="' + offset + '" ' +
+        'stroke-linecap="round" style="filter:drop-shadow(0 0 8px ' + glowColor + ')"/>' +
+        '</svg>' +
+        '<div style="position:absolute;top:50%%;left:50%%;transform:translate(-50%%,-50%%);text-align:center">' +
+        '<div style="font-size:32px;font-weight:800;color:' + scoreColor + '">' + score + '%%</div>' +
+        '<div style="font-size:10px;color:var(--text-muted)">Compliant</div>' +
+        '</div></div>' +
+        '<div style="display:flex;justify-content:center;gap:20px;margin-top:8px;font-size:11px">' +
+        '<span style="color:#3fb950">' + passed + ' Pass</span>' +
+        '<span style="color:#f85149">' + failed + ' Fail</span>' +
+        '</div>';
+    } else if (cisContainer) {
+      cisContainer.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#64748b">Run analysis to see CIS compliance</div>';
+    }
+
     // Risk score with circular gauge
     const riskContainer = document.getElementById('risk-chart');
     if (riskContainer) {
@@ -1861,13 +2104,13 @@ function showRBACModal(idx, finding) {
   html += '<div class="modal-stat"><div class="modal-stat-value">' + (finding.affected?.length || 1) + '</div><div class="modal-stat-label">Affected Resources</div></div>';
   html += '</div>';
 
-  html += '<div class="modal-section"><div class="modal-section-title">Description</div><p style="color:#94a3b8;line-height:1.6">' + finding.description + '</p></div>';
+  html += '<div class="modal-section"><div class="modal-section-title">Description</div><p style="color:#94a3b8;line-height:1.6">' + e(finding.description) + '</p></div>';
 
   if (finding.affected?.length) {
     html += '<div class="modal-section"><div class="modal-section-title">Affected Resources</div><ul class="modal-list">';
     finding.affected.forEach(a => {
-      html += '<li><div class="modal-list-title">' + a.name + '<span class="modal-list-badge" style="background:rgba(99,102,241,0.2);color:#a5b4fc">' + (a.kind || 'Resource') + '</span></div>';
-      html += '<div class="modal-list-meta">' + (a.namespace || 'cluster-scoped') + (a.details ? ' • ' + a.details : '') + '</div></li>';
+      html += '<li><div class="modal-list-title">' + e(a.name) + '<span class="modal-list-badge" style="background:rgba(99,102,241,0.2);color:#a5b4fc">' + e(a.kind || 'Resource') + '</span></div>';
+      html += '<div class="modal-list-meta">' + e(a.namespace || 'cluster-scoped') + (a.details ? ' • ' + e(a.details) : '') + '</div></li>';
     });
     html += '</ul></div>';
   }
@@ -1875,17 +2118,6 @@ function showRBACModal(idx, finding) {
   if (finding.remediation) {
     html += '<div class="modal-section"><div class="modal-section-title">Remediation</div><div class="remediation-box">' + finding.remediation + '</div></div>';
   }
-
-  openModal('[' + finding.checkId + '] ' + finding.checkName, html);
-}
-
-function showPodSecModal(idx, finding) {
-  let html = '<div class="modal-grid">';
-  html += '<div class="modal-stat"><div class="modal-stat-value" style="font-size:20px">' + finding.workload + '</div><div class="modal-stat-label">Workload</div></div>';
-  html += '<div class="modal-stat"><div class="modal-stat-value">' + finding.severity + '</div><div class="modal-stat-label">Severity</div></div>';
-  html += '</div>';
-
-  html += '<div class="modal-section"><div class="modal-section-title">Details</div><p style="color:#94a3b8;line-height:1.6">' + finding.description + '</p></div>';
 
   openModal('[' + finding.checkId + '] ' + finding.checkName, html);
 }
@@ -1927,7 +2159,7 @@ function showAttackPathModal(idx, finding) {
     html += '</div>';
   }
 
-  openModal('Attack Paths: ' + finding.workload, html);
+  openModal('Attack Paths: ' + e(finding.workload), html);
 }
 
 function showCloudModal(idx, finding) {
@@ -1936,7 +2168,7 @@ function showCloudModal(idx, finding) {
   html += '<div class="modal-stat"><div class="modal-stat-value" style="font-size:16px;word-break:break-all">' + (finding.roleArn || 'N/A') + '</div><div class="modal-stat-label">Role ARN</div></div>';
   html += '</div>';
 
-  html += '<div class="modal-section"><div class="modal-section-title">Issue</div><p style="color:#94a3b8;line-height:1.6">' + finding.description + '</p></div>';
+  html += '<div class="modal-section"><div class="modal-section-title">Issue</div><p style="color:#94a3b8;line-height:1.6">' + e(finding.description) + '</p></div>';
 
   openModal(finding.checkName || finding.issue, html);
 }
@@ -1984,7 +2216,7 @@ function showBlastModal(idx, finding) {
     html += '</div>';
   }
 
-  openModal('Blast Radius: ' + r.workload, html);
+  openModal('Blast Radius: ' + e(r.workload), html);
 }
 
 function renderBlast() {
@@ -2017,8 +2249,8 @@ function renderBlast() {
       // Header
       html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">';
       html += '<div>';
-      html += '<div style="font-size:20px;font-weight:700;color:#f1f5f9">' + r.workload + '</div>';
-      html += '<div style="font-size:13px;color:#64748b;margin-top:4px">' + r.namespace + ' / ' + r.kind + '</div>';
+      html += '<div style="font-size:20px;font-weight:700;color:#f1f5f9">' + e(r.workload) + '</div>';
+      html += '<div style="font-size:13px;color:#64748b;margin-top:4px">' + e(r.namespace) + ' / ' + e(r.kind) + '</div>';
       if (r.serviceAccount) {
         html += '<div style="font-size:12px;color:#a78bfa;margin-top:4px">Service Account: ' + r.serviceAccount + '</div>';
       }
@@ -2253,8 +2485,8 @@ function renderAttack() {
 
       html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:16px;padding:20px;margin-bottom:16px">';
       html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
-      html += '<div><span style="font-size:16px;font-weight:700;color:#f1f5f9">' + r.workload + '</span>';
-      html += '<span style="font-size:12px;color:#64748b;margin-left:12px">' + r.namespace + '</span></div>';
+      html += '<div><span style="font-size:16px;font-weight:700;color:#f1f5f9">' + e(r.workload) + '</span>';
+      html += '<span style="font-size:12px;color:#64748b;margin-left:12px">' + e(r.namespace) + '</span></div>';
       html += '<div>';
       if (r.critical > 0) html += '<span class="mini-badge critical" style="margin-left:8px">' + r.critical + ' critical</span>';
       if (r.high > 0) html += '<span class="mini-badge high" style="margin-left:8px">' + r.high + ' high</span>';
@@ -2326,13 +2558,16 @@ function renderRBAC() {
   if (data.rbacAudit?.findings?.length) {
     html += '<div class="findings-grid">';
     data.rbacAudit.findings.forEach((f, idx) => {
+      const cisIds = (f.cisControls || []).join(', ');
       html += '<div class="finding-card ' + f.severity + '" onclick="showRBACModal(' + idx + ', ' + JSON.stringify(f).replace(/"/g, '&quot;') + ')">';
       html += '<div class="finding-header">';
       html += '<span class="finding-severity ' + f.severity + '">' + f.severity + '</span>';
       html += '<div class="finding-content">';
       html += '<div class="finding-title">[' + f.checkId + '] ' + f.checkName + '</div>';
-      html += '<div class="finding-meta">' + f.namespace + ' • ' + f.subject + '</div>';
-      html += '<div class="finding-desc">' + f.description + '</div>';
+      html += '<div class="finding-meta">' + e(f.namespace) + ' • ' + e(f.subject);
+      if (cisIds) html += ' • <span style="color:#60a5fa">CIS ' + cisIds + '</span>';
+      html += '</div>';
+      html += '<div class="finding-desc">' + e(f.description) + '</div>';
       html += '</div></div></div>';
     });
     html += '</div>';
@@ -2346,16 +2581,27 @@ function renderRBAC() {
 function renderPodSec() {
   let html = '<div class="section-header"><div class="section-title">Pod Security Audit</div></div>';
 
+  const summary = data.podSecurity?.summary || {};
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">';
+  html += '<div class="stat-card"><div class="stat-value critical">' + (summary.critical || 0) + '</div><div class="stat-label">Critical</div></div>';
+  html += '<div class="stat-card"><div class="stat-value high">' + (summary.high || 0) + '</div><div class="stat-label">High</div></div>';
+  html += '<div class="stat-card"><div class="stat-value medium">' + (summary.medium || 0) + '</div><div class="stat-label">Medium</div></div>';
+  html += '<div class="stat-card"><div class="stat-value low">' + (summary.low || 0) + '</div><div class="stat-label">Low</div></div>';
+  html += '</div>';
+
   if (data.podSecurity?.findings?.length) {
     html += '<div class="findings-grid">';
     data.podSecurity.findings.forEach((f, idx) => {
-      html += '<div class="finding-card ' + f.severity + '" onclick="showPodSecModal(' + idx + ', ' + JSON.stringify(f).replace(/"/g, '&quot;') + ')">';
+      const cisIds = (f.cisControls || []).join(', ');
+      html += '<div class="finding-card ' + f.severity + '" onclick="showPodSecModal(' + idx + ')">';
       html += '<div class="finding-header">';
       html += '<span class="finding-severity ' + f.severity + '">' + f.severity + '</span>';
       html += '<div class="finding-content">';
       html += '<div class="finding-title">[' + f.checkId + '] ' + f.checkName + '</div>';
-      html += '<div class="finding-meta">' + f.namespace + '/' + f.workload + (f.container ? ' • ' + f.container : '') + '</div>';
-      html += '<div class="finding-desc">' + f.details + '</div>';
+      html += '<div class="finding-meta">' + e(f.namespace) + '/' + e(f.workload) + (f.container ? ' • ' + e(f.container) : '');
+      if (cisIds) html += ' • <span style="color:#60a5fa">CIS ' + cisIds + '</span>';
+      html += '</div>';
+      html += '<div class="finding-desc">' + e(f.description) + '</div>';
       html += '</div></div></div>';
     });
     html += '</div>';
@@ -2364,6 +2610,40 @@ function renderPodSec() {
   }
 
   document.getElementById('panel-podsec').innerHTML = html;
+}
+
+function showPodSecModal(idx) {
+  const f = data.podSecurity.findings[idx];
+  const sevColor = f.severity === 'critical' ? '#f87171' : f.severity === 'high' ? '#fb923c' : f.severity === 'medium' ? '#fbbf24' : '#60a5fa';
+
+  let html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">';
+  html += '<span style="background:' + sevColor + '22;color:' + sevColor + ';padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;text-transform:uppercase">' + f.severity + '</span>';
+  html += '<span style="color:#64748b;font-size:13px">' + (f.category || '') + '</span>';
+  html += '</div>';
+
+  html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:12px;padding:16px;margin-bottom:16px">';
+  html += '<div style="color:#94a3b8;font-size:13px;margin-bottom:8px">Why This Matters</div>';
+  html += '<div style="color:#e2e8f0;font-size:14px;line-height:1.6">' + e(f.description) + '</div>';
+  html += '</div>';
+
+  if (f.affected?.length) {
+    html += '<div style="font-size:16px;font-weight:600;color:#f1f5f9;margin-bottom:12px">Affected Workloads (' + f.affected.length + ')</div>';
+    html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:12px;padding:16px;margin-bottom:16px;max-height:200px;overflow-y:auto">';
+    f.affected.forEach(a => {
+      html += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(51,65,85,0.3)">';
+      html += '<span style="color:#e2e8f0">' + e(a.namespace) + '/' + e(a.name) + (a.kind ? ' (' + e(a.kind) + ')' : '') + '</span>';
+      html += '<span style="color:#94a3b8;font-size:13px">' + e(a.details) + '</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '<div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:12px;padding:16px">';
+  html += '<div style="color:#4ade80;font-size:13px;font-weight:600;margin-bottom:8px">Remediation</div>';
+  html += '<div style="color:#86efac;font-size:14px">' + e(f.remediation) + '</div>';
+  html += '</div>';
+
+  openModal('[' + f.checkId + '] ' + f.checkName, html);
 }
 
 function renderNetPol() {
@@ -2388,7 +2668,7 @@ function renderNetPol() {
       html += '<div class="finding-content">';
       html += '<div class="finding-title">[' + f.checkId + '] ' + f.checkName + '</div>';
       html += '<div class="finding-meta">' + f.namespace + '/' + f.workload + '</div>';
-      html += '<div class="finding-desc">' + f.details + '</div>';
+      html += '<div class="finding-desc">' + e(f.details) + '</div>';
       html += '</div></div></div>';
     });
     html += '</div>';
@@ -2405,8 +2685,8 @@ function renderNetPol() {
       html += '<span class="finding-severity workloads">suggested</span>';
       html += '<div class="finding-content">';
       html += '<div class="finding-title">' + s.policyName + '</div>';
-      html += '<div class="finding-meta">' + s.namespace + '/' + s.workload + ' (' + s.workloadKind + ')' + (s.services?.length ? ' • Services: ' + s.services.join(', ') : '') + '</div>';
-      html += '<div class="finding-desc">' + s.description + '</div>';
+      html += '<div class="finding-meta">' + e(s.namespace) + '/' + e(s.workload) + ' (' + e(s.workloadKind) + ')' + (s.services?.length ? ' • Services: ' + e(s.services.join(', ')) : '') + '</div>';
+      html += '<div class="finding-desc">' + e(s.description) + '</div>';
       html += '</div></div>';
       html += '<div id="policy-yaml-' + idx + '" style="display:none;margin-top:12px">';
       html += '<pre style="background:rgba(15,23,42,0.8);border:1px solid rgba(51,65,85,0.5);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;color:#e2e8f0;white-space:pre-wrap">' + escapeHtml(s.yaml) + '</pre>';
@@ -2453,7 +2733,7 @@ function renderCloud() {
       html += '<div class="finding-content">';
       html += '<div class="finding-title">' + f.issue + '</div>';
       html += '<div class="finding-meta">' + f.provider + ' • ' + f.roleArn + '</div>';
-      html += '<div class="finding-desc">' + f.description + '</div>';
+      html += '<div class="finding-desc">' + e(f.description) + '</div>';
       html += '</div></div></div>';
     });
     html += '</div>';
@@ -2462,6 +2742,56 @@ function renderCloud() {
   }
 
   document.getElementById('panel-cloud').innerHTML = html;
+}
+
+function renderUnused() {
+  let html = '<div class="section-header"><div class="section-title">Unused Permissions Analysis</div></div>';
+
+  const unused = data.unusedPerms;
+  if (!unused || !unused.permissions?.length) {
+    html += '<div class="empty-state"><div class="empty-title">No unused permissions data</div>';
+    html += '<div style="color:#94a3b8;margin-top:8px">Use --audit-source to analyze audit logs and find unused permissions.</div>';
+    html += '<div style="color:#64748b;margin-top:16px;font-size:13px">Example: idc dashboard -A --audit-source cloudwatch --log-group /aws/eks/cluster/cluster</div>';
+    html += '</div>';
+    document.getElementById('panel-unused').innerHTML = html;
+    return;
+  }
+
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">';
+  html += '<div class="stat-card"><div class="stat-value critical">' + (unused.summary?.totalUnused || 0) + '</div><div class="stat-label">Unused Permissions</div></div>';
+  html += '<div class="stat-card"><div class="stat-value high">' + (unused.summary?.neverUsedCount || 0) + '</div><div class="stat-label">Never Used</div></div>';
+  html += '<div class="stat-card"><div class="stat-value medium">' + (unused.summary?.staleCount || 0) + '</div><div class="stat-label">Stale (Unused Recently)</div></div>';
+  html += '<div class="stat-card"><div class="stat-value paths">' + (unused.summary?.affectedAccounts || 0) + '</div><div class="stat-label">Affected Accounts</div></div>';
+  html += '</div>';
+
+  html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:16px;padding:20px">';
+  html += '<div style="font-size:18px;font-weight:700;color:#f1f5f9;margin-bottom:16px">Unused Permission Details</div>';
+  html += '<table style="width:100%%;border-collapse:collapse">';
+  html += '<thead><tr style="border-bottom:1px solid rgba(51,65,85,0.5)">';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Service Account</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Resource</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Verb</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Via Role</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Status</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Last Used</th>';
+  html += '</tr></thead><tbody>';
+
+  unused.permissions.forEach(p => {
+    const status = p.neverUsed ? 'Never Used' : p.daysSinceUse + ' days ago';
+    const statusColor = p.neverUsed ? '#f87171' : '#fb923c';
+    html += '<tr style="border-bottom:1px solid rgba(51,65,85,0.3)">';
+    html += '<td style="padding:12px;color:#e2e8f0;font-weight:500">' + e(p.serviceAccount) + '</td>';
+    html += '<td style="padding:12px;color:#94a3b8">' + e(p.resource) + '</td>';
+    html += '<td style="padding:12px;color:#94a3b8">' + e(p.verb) + '</td>';
+    html += '<td style="padding:12px;color:#94a3b8">' + e(p.viaRole) + '</td>';
+    html += '<td style="padding:12px"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:4px 8px;border-radius:4px;font-size:12px">' + status + '</span></td>';
+    html += '<td style="padding:12px;color:#64748b">' + (p.lastUsed || '-') + '</td>';
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+
+  document.getElementById('panel-unused').innerHTML = html;
 }
 
 function renderPermissions() {
@@ -2499,9 +2829,9 @@ function renderPermissions() {
     perms.dangerousPerms.forEach(p => {
       const sevColor = p.severity === 'critical' ? '#f87171' : p.severity === 'high' ? '#fb923c' : '#fbbf24';
       html += '<tr style="border-bottom:1px solid rgba(51,65,85,0.3)">';
-      html += '<td style="padding:12px;color:#e2e8f0;font-weight:500">' + p.subject + '</td>';
-      html += '<td style="padding:12px;color:#94a3b8">' + p.subjectKind + '</td>';
-      html += '<td style="padding:12px;color:#94a3b8">' + p.namespace + '</td>';
+      html += '<td style="padding:12px;color:#e2e8f0;font-weight:500">' + e(p.subject) + '</td>';
+      html += '<td style="padding:12px;color:#94a3b8">' + e(p.subjectKind) + '</td>';
+      html += '<td style="padding:12px;color:#94a3b8">' + e(p.namespace) + '</td>';
       html += '<td style="padding:12px;color:#e2e8f0">' + p.permission + '</td>';
       html += '<td style="padding:12px"><span class="mini-badge ' + p.severity + '">' + p.severity + '</span></td>';
       html += '</tr>';
@@ -2557,6 +2887,64 @@ function renderPermissions() {
   });
   html += '</div>';
 
+  // OpenShift SCC section
+  const scc = data.sccData;
+  if (scc && scc.isOpenShift && scc.sccs?.length > 0) {
+    html += '<div style="margin-top:24px">';
+    html += '<div style="font-size:20px;font-weight:700;color:#f1f5f9;margin-bottom:16px">OpenShift Security Context Constraints</div>';
+
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">';
+    html += '<div class="stat-card"><div class="stat-value paths">' + (scc.summary?.totalSccs || 0) + '</div><div class="stat-label">Total SCCs</div></div>';
+    html += '<div class="stat-card"><div class="stat-value critical">' + (scc.summary?.privilegedSccs || 0) + '</div><div class="stat-label">Privileged SCCs</div></div>';
+    html += '<div class="stat-card"><div class="stat-value high">' + (scc.summary?.riskyBindings || 0) + '</div><div class="stat-label">Risky Bindings</div></div>';
+    html += '<div class="stat-card"><div class="stat-value critical">' + (scc.summary?.escalationPaths || 0) + '</div><div class="stat-label">Escalation Paths</div></div>';
+    html += '</div>';
+
+    html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:16px;padding:20px;margin-bottom:24px">';
+    html += '<div style="font-size:18px;font-weight:700;color:#f1f5f9;margin-bottom:16px">SCC Risk Assessment</div>';
+    html += '<table style="width:100%%;border-collapse:collapse">';
+    html += '<thead><tr style="border-bottom:1px solid rgba(51,65,85,0.5)">';
+    html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">SCC Name</th>';
+    html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Risk</th>';
+    html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Score</th>';
+    html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Allowed Flags</th>';
+    html += '</tr></thead><tbody>';
+    scc.sccs.forEach(s => {
+      const riskColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308','low':'#22c55e'}[s.riskLevel] || '#94a3b8';
+      html += '<tr style="border-bottom:1px solid rgba(51,65,85,0.3)">';
+      html += '<td style="padding:12px;color:#e2e8f0;font-weight:500">' + e(s.name) + '</td>';
+      html += '<td style="padding:12px"><span style="background:' + riskColor + '22;color:' + riskColor + ';padding:4px 8px;border-radius:4px;font-size:12px">' + s.riskLevel + '</span></td>';
+      html += '<td style="padding:12px;color:#94a3b8">' + s.riskScore + '</td>';
+      html += '<td style="padding:12px;color:#94a3b8">' + (s.allowedFlags || []).join(', ') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+
+    if (scc.riskyBindings?.length > 0) {
+      html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:16px;padding:20px">';
+      html += '<div style="font-size:18px;font-weight:700;color:#f1f5f9;margin-bottom:16px">Risky SCC Bindings</div>';
+      html += '<table style="width:100%%;border-collapse:collapse">';
+      html += '<thead><tr style="border-bottom:1px solid rgba(51,65,85,0.5)">';
+      html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">SCC</th>';
+      html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Subject</th>';
+      html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Risk</th>';
+      html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Reason</th>';
+      html += '</tr></thead><tbody>';
+      scc.riskyBindings.forEach(b => {
+        const riskColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308'}[b.riskLevel] || '#94a3b8';
+        const subject = b.subjectNS ? b.subjectType + ': ' + b.subjectNS + '/' + b.subjectName : b.subjectType + ': ' + b.subjectName;
+        html += '<tr style="border-bottom:1px solid rgba(51,65,85,0.3)">';
+        html += '<td style="padding:12px;color:#e2e8f0;font-weight:500">' + e(b.sccName) + '</td>';
+        html += '<td style="padding:12px;color:#94a3b8">' + e(subject) + '</td>';
+        html += '<td style="padding:12px"><span style="background:' + riskColor + '22;color:' + riskColor + ';padding:4px 8px;border-radius:4px;font-size:12px">' + b.riskLevel + '</span></td>';
+        html += '<td style="padding:12px;color:#94a3b8">' + e(b.riskReason) + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+    html += '</div>';
+  }
+
   document.getElementById('panel-permissions').innerHTML = html;
 }
 
@@ -2583,6 +2971,8 @@ try {
   renderNetPol();
   console.log('Rendering cloud...');
   renderCloud();
+  console.log('Rendering unused...');
+  renderUnused();
   console.log('All renders complete!');
 } catch(e) {
   console.error('Render error:', e);

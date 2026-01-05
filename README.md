@@ -4,6 +4,8 @@
 
 Identity Chain maps the complete identity chain from Kubernetes workloads through RBAC to cloud IAM (AWS, Azure, GCP), enabling blast radius analysis for security assessments and incident response.
 
+Works with **EKS**, **GKE**, **AKS**, **OpenShift**, **Rancher**, and any standard Kubernetes distribution.
+
 ## The Problem
 
 When a Kubernetes workload is compromised, security teams need to answer: **"What can the attacker access?"**
@@ -270,10 +272,30 @@ idc privesc --all -A                         # Find privesc paths
 idc privesc --workload deploy/api -n prod
 ```
 
+### `idc scc` - OpenShift SCC Analysis
+
+```bash
+idc scc -A                                   # Analyze Security Context Constraints
+idc scc -A --include-system                  # Include system SCCs
+```
+
+### `idc sa-lifecycle` - Service Account Lifecycle
+
+```bash
+idc sa-lifecycle -A                          # Find orphaned/unused SAs
+```
+
+### `idc generate` - Least-Privilege Role Generator
+
+```bash
+idc generate -A --audit-source cloudwatch --log-group /aws/eks/cluster/cluster
+idc generate -A --audit-source gcp --gcp-project my-project --since 30d -f roles.yaml
+```
+
 ### `idc unused` - Find Unused Permissions
 
 ```bash
-idc unused -A                                # Find overprivileged SAs
+idc unused -A --audit-source cloudwatch --log-group /aws/eks/cluster/cluster
 ```
 
 ## Architecture
@@ -361,13 +383,41 @@ graph TD
     style M3 fill:#ffa500
 ```
 
-## Cloud Provider Support
+## Platform Support
+
+### Kubernetes Distributions
+
+| Distribution | Support | Notes |
+|--------------|---------|-------|
+| EKS | Full | IRSA cloud identity |
+| GKE | Full | Workload Identity |
+| AKS | Full | Workload Identity |
+| OpenShift | Full | Includes SCC analysis |
+| Rancher/RKE | Full | Standard RBAC |
+| k3s/k0s | Full | Standard RBAC |
+| Vanilla K8s | Full | Standard RBAC |
+
+### Cloud Identity Federation
 
 | Provider | Annotation | Flag |
 |----------|------------|------|
 | AWS IRSA | `eks.amazonaws.com/role-arn` | `--aws-region us-west-2` |
 | GCP Workload Identity | `iam.gke.io/gcp-service-account` | `--gcp-project my-project` |
 | Azure Workload Identity | `azure.workload.identity/client-id` | `--azure-subscription <id>` |
+
+### OpenShift Security Context Constraints
+
+On OpenShift clusters, idc automatically detects and analyzes SCCs:
+
+```bash
+idc scc -A                    # Dedicated SCC analysis
+idc dashboard -A -f report.html   # SCC included in Permissions tab
+```
+
+SCC analysis includes:
+- Risk scoring for each SCC (privileged, hostNetwork, hostPID, etc.)
+- Risky bindings (who can use privileged SCCs)
+- Escalation paths via RBAC
 
 ## Use Cases
 

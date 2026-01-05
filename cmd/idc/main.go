@@ -87,6 +87,9 @@ Examples:
 	rootCmd.AddCommand(networkPolicyCmd())
 	rootCmd.AddCommand(attackPathCmd())
 	rootCmd.AddCommand(dashboardCmd())
+	rootCmd.AddCommand(generateCmd())
+	rootCmd.AddCommand(saLifecycleCmd())
+	rootCmd.AddCommand(sccCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -223,6 +226,13 @@ func collectGraph(ctx context.Context) (*graph.Graph, error) {
 		return nil, err
 	}
 
+	if collector.IsOpenShiftCluster(ctx, opts) {
+		osCollector, err := collector.NewOpenShiftCollector(opts)
+		if err == nil {
+			_ = osCollector.Collect(ctx, builder)
+		}
+	}
+
 	if includeCloud {
 		cloudCollector := cloud.NewMultiCloudCollector()
 
@@ -247,6 +257,7 @@ func unusedCmd() *cobra.Command {
 	var auditPath string
 	var esEndpoint string
 	var esIndex string
+	var cwLogGroup string
 
 	cmd := &cobra.Command{
 		Use:   "unused",
@@ -256,7 +267,10 @@ This helps identify overprivileged service accounts.
 
 Examples:
   idc unused --since 30d --audit-source file --audit-path /var/log/audit/
-  idc unused --since 7d --audit-source elasticsearch --es-endpoint http://es:9200`,
+  idc unused --since 7d --audit-source elasticsearch --es-endpoint http://es:9200
+  idc unused --since 30d --audit-source cloudwatch --log-group /aws/eks/my-cluster/cluster --aws-region us-west-2
+  idc unused --since 30d --audit-source gcp --gcp-project my-project
+  idc unused --since 30d --audit-source azure --azure-subscription <sub-id>`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
@@ -272,8 +286,31 @@ Examples:
 				source = audit.NewDirectorySource(auditPath, "*.log")
 			case "elasticsearch":
 				source = audit.NewElasticsearchSource(esEndpoint, esIndex, "", "")
+			case "cloudwatch":
+				cwSource, err := audit.NewCloudWatchSource(ctx, audit.CloudWatchConfig{
+					LogGroup: cwLogGroup,
+					Region:   awsRegion,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to create CloudWatch source: %w", err)
+				}
+				source = cwSource
+			case "gcp", "gcp-logging":
+				gcpSource, err := audit.NewGCPCloudLoggingSource(ctx, audit.GCPCloudLoggingConfig{
+					ProjectID: gcpProject,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to create GCP Cloud Logging source: %w", err)
+				}
+				source = gcpSource
+			case "azure", "azure-log-analytics":
+				azSource, err := audit.NewAzureLogAnalyticsSource(azureSubID)
+				if err != nil {
+					return fmt.Errorf("failed to create Azure Log Analytics source: %w", err)
+				}
+				source = azSource
 			default:
-				return fmt.Errorf("unsupported audit source: %s", auditSource)
+				return fmt.Errorf("unsupported audit source: %s (supported: file, elasticsearch, cloudwatch, gcp, azure)", auditSource)
 			}
 			defer source.Close()
 
@@ -323,10 +360,11 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&since, "since", "30d", "Time period to analyze (e.g., 7d, 30d)")
-	cmd.Flags().StringVar(&auditSource, "audit-source", "file", "Audit log source: file, elasticsearch, loki")
+	cmd.Flags().StringVar(&auditSource, "audit-source", "file", "Audit log source: file, elasticsearch, cloudwatch")
 	cmd.Flags().StringVar(&auditPath, "audit-path", "/var/log/kubernetes/audit/", "Path to audit log files")
 	cmd.Flags().StringVar(&esEndpoint, "es-endpoint", "", "Elasticsearch endpoint URL")
 	cmd.Flags().StringVar(&esIndex, "es-index", "kubernetes-audit-*", "Elasticsearch index pattern")
+	cmd.Flags().StringVar(&cwLogGroup, "log-group", "", "CloudWatch log group (e.g., /aws/eks/cluster-name/cluster)")
 
 	return cmd
 }
@@ -336,6 +374,7 @@ func auditCmd() *cobra.Command {
 	var auditPath string
 	var esEndpoint string
 	var esIndex string
+	var cwLogGroup string
 	var since string
 	var realtime bool
 
@@ -346,7 +385,10 @@ func auditCmd() *cobra.Command {
 
 Examples:
   idc audit --since 24h --audit-source file --audit-path /var/log/audit/
-  idc audit --realtime --audit-source elasticsearch`,
+  idc audit --realtime --audit-source elasticsearch
+  idc audit --since 24h --audit-source cloudwatch --log-group /aws/eks/my-cluster/cluster --aws-region us-west-2
+  idc audit --since 24h --audit-source gcp --gcp-project my-project
+  idc audit --since 24h --audit-source azure --azure-subscription <sub-id>`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
@@ -359,8 +401,31 @@ Examples:
 				source = audit.NewElasticsearchSource(esEndpoint, esIndex, "", "")
 			case "loki":
 				source = audit.NewLokiSource(esEndpoint, "")
+			case "cloudwatch":
+				cwSource, err := audit.NewCloudWatchSource(ctx, audit.CloudWatchConfig{
+					LogGroup: cwLogGroup,
+					Region:   awsRegion,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to create CloudWatch source: %w", err)
+				}
+				source = cwSource
+			case "gcp", "gcp-logging":
+				gcpSource, err := audit.NewGCPCloudLoggingSource(ctx, audit.GCPCloudLoggingConfig{
+					ProjectID: gcpProject,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to create GCP Cloud Logging source: %w", err)
+				}
+				source = gcpSource
+			case "azure", "azure-log-analytics":
+				azSource, err := audit.NewAzureLogAnalyticsSource(azureSubID)
+				if err != nil {
+					return fmt.Errorf("failed to create Azure Log Analytics source: %w", err)
+				}
+				source = azSource
 			default:
-				return fmt.Errorf("unsupported audit source: %s", auditSource)
+				return fmt.Errorf("unsupported audit source: %s (supported: file, elasticsearch, loki, cloudwatch, gcp, azure)", auditSource)
 			}
 			defer source.Close()
 
@@ -424,9 +489,10 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&since, "since", "24h", "Time period to analyze")
-	cmd.Flags().StringVar(&auditSource, "audit-source", "file", "Audit log source: file, elasticsearch, loki")
+	cmd.Flags().StringVar(&auditSource, "audit-source", "file", "Audit log source: file, elasticsearch, loki, cloudwatch")
 	cmd.Flags().StringVar(&auditPath, "audit-path", "/var/log/kubernetes/audit/", "Path to audit log files")
 	cmd.Flags().StringVar(&esEndpoint, "es-endpoint", "", "Elasticsearch/Loki endpoint URL")
+	cmd.Flags().StringVar(&cwLogGroup, "log-group", "", "CloudWatch log group (e.g., /aws/eks/cluster-name/cluster)")
 	cmd.Flags().StringVar(&esIndex, "es-index", "kubernetes-audit-*", "Elasticsearch index pattern")
 	cmd.Flags().BoolVar(&realtime, "realtime", false, "Enable realtime monitoring mode")
 
@@ -1144,6 +1210,12 @@ Examples:
 
 func dashboardCmd() *cobra.Command {
 	var outputFile string
+	var auditSource string
+	var auditPath string
+	var esEndpoint string
+	var esIndex string
+	var cwLogGroup string
+	var auditSince string
 
 	cmd := &cobra.Command{
 		Use:   "dashboard",
@@ -1155,12 +1227,15 @@ func dashboardCmd() *cobra.Command {
 - Pod security analysis
 - Network policy audit
 - Cloud IAM audit (if --include-cloud)
+- Unused permissions (if --audit-source specified)
 
 Outputs an interactive HTML dashboard with tabs for each analysis type.
 
 Examples:
-  idc dashboard -A -o report.html
-  idc dashboard -A --include-cloud --aws-region us-west-2 -o report.html`,
+  idc dashboard -A -f report.html
+  idc dashboard -A --include-cloud --aws-region us-west-2 -f report.html
+  idc dashboard -A --audit-source cloudwatch --log-group /aws/eks/cluster/cluster --aws-region us-west-2 -f report.html
+  idc dashboard -A --audit-source gcp --gcp-project my-project -f report.html`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
@@ -1210,23 +1285,50 @@ Examples:
 				cloudResult = analysis.AnalyzeCloudIAM(g)
 			}
 
+			fmt.Fprintln(os.Stderr, "Running SCC analysis...")
+			sccResult := analysis.AnalyzeSCCs(g)
+
 			fmt.Fprintln(os.Stderr, "Running permissions audit...")
 			permissionsData := collectPermissionsData(g)
 
+			// Run unused permissions analysis if audit source is configured
+			var unusedPerms []audit.UnusedPermission
+			if auditSource != "" {
+				fmt.Fprintln(os.Stderr, "Analyzing audit logs for unused permissions...")
+				unusedPerms = collectUnusedPermissions(ctx, g, auditSource, auditPath, esEndpoint, esIndex, cwLogGroup, auditSince)
+			}
+
+			fmt.Fprintln(os.Stderr, "Generating CIS compliance summary...")
+			var rbacFindings []analysis.RBACFinding
+			var podSecFindings []analysis.PodSecurityFinding
+			var netPolFindings []analysis.NetworkPolicyFinding
+			if rbacResult != nil {
+				rbacFindings = rbacResult.Findings
+			}
+			if podSecResult != nil {
+				podSecFindings = podSecResult.Findings
+			}
+			if netPolResult != nil {
+				netPolFindings = netPolResult.Findings
+			}
+			cisCompliance := analysis.GenerateCISComplianceSummary(rbacFindings, podSecFindings, netPolFindings)
+
 			fmt.Fprintln(os.Stderr, "Generating dashboard...")
 
-			// Generate unified dashboard
 			dashboard := output.NewDashboard(w)
 			err = dashboard.Generate(output.DashboardData{
-				BlastResults:   blastResults,
-				AttackPaths:    attackResults,
-				RBACAudit:      rbacResult,
-				PodSecurity:    podSecResult,
-				NetworkPolicy:  netPolResult,
-				CloudAudit:     cloudResult,
-				Permissions:    permissionsData,
-				GraphStats:     g.Stats(),
-				Graph:          g,
+				BlastResults:      blastResults,
+				AttackPaths:       attackResults,
+				RBACAudit:         rbacResult,
+				PodSecurity:       podSecResult,
+				NetworkPolicy:     netPolResult,
+				CloudAudit:        cloudResult,
+				Permissions:       permissionsData,
+				UnusedPermissions: unusedPerms,
+				SCCAnalysis:       sccResult,
+				CISCompliance:     cisCompliance,
+				GraphStats:        g.Stats(),
+				Graph:             g,
 			})
 
 			if err != nil {
@@ -1242,8 +1344,74 @@ Examples:
 	}
 
 	cmd.Flags().StringVarP(&outputFile, "output-file", "f", "", "Output file path (default: stdout)")
+	cmd.Flags().StringVar(&auditSource, "audit-source", "", "Audit log source: file, elasticsearch, cloudwatch, gcp, azure")
+	cmd.Flags().StringVar(&auditPath, "audit-path", "/var/log/kubernetes/audit/", "Path to audit log files")
+	cmd.Flags().StringVar(&esEndpoint, "es-endpoint", "", "Elasticsearch endpoint URL")
+	cmd.Flags().StringVar(&esIndex, "es-index", "kubernetes-audit-*", "Elasticsearch index pattern")
+	cmd.Flags().StringVar(&cwLogGroup, "log-group", "", "CloudWatch log group")
+	cmd.Flags().StringVar(&auditSince, "audit-since", "30d", "Time period for audit analysis (e.g., 7d, 30d)")
 
 	return cmd
+}
+
+// collectUnusedPermissions runs audit log analysis and returns unused permissions
+func collectUnusedPermissions(ctx context.Context, g *graph.Graph, auditSource, auditPath, esEndpoint, esIndex, cwLogGroup, since string) []audit.UnusedPermission {
+	var source audit.Source
+	var err error
+
+	switch auditSource {
+	case "file":
+		source = audit.NewDirectorySource(auditPath, "*.log")
+	case "elasticsearch":
+		source = audit.NewElasticsearchSource(esEndpoint, esIndex, "", "")
+	case "cloudwatch":
+		source, err = audit.NewCloudWatchSource(ctx, audit.CloudWatchConfig{
+			LogGroup: cwLogGroup,
+			Region:   awsRegion,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to create CloudWatch source: %v\n", err)
+			return nil
+		}
+	case "gcp", "gcp-logging":
+		source, err = audit.NewGCPCloudLoggingSource(ctx, audit.GCPCloudLoggingConfig{
+			ProjectID: gcpProject,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to create GCP Cloud Logging source: %v\n", err)
+			return nil
+		}
+	case "azure", "azure-log-analytics":
+		source, err = audit.NewAzureLogAnalyticsSource(azureSubID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to create Azure Log Analytics source: %v\n", err)
+			return nil
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "Warning: Unknown audit source: %s\n", auditSource)
+		return nil
+	}
+	defer source.Close()
+
+	duration, err := parseDuration(since)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Invalid duration %s: %v\n", since, err)
+		duration = 30 * 24 * time.Hour // default to 30 days
+	}
+
+	analyzer := audit.NewAnalyzer(source, g)
+	queryOpts := audit.QueryOptions{
+		StartTime:     time.Now().Add(-duration),
+		EndTime:       time.Now(),
+		IncludeSystem: includeSystem,
+	}
+
+	if err := analyzer.Analyze(ctx, queryOpts); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Audit analysis failed: %v\n", err)
+		return nil
+	}
+
+	return analyzer.GetUnusedPermissions(duration)
 }
 
 // collectPermissionsData runs WhoCan queries for dangerous permissions
@@ -1373,7 +1541,6 @@ func buildDangerousPermsSummary(data *output.PermissionsData) []output.Dangerous
 		}
 	}
 
-	// Process impersonate
 	for _, result := range data.Impersonate {
 		for _, subj := range result.Subjects {
 			addPerm(subj.Name, subj.Kind, "cluster-wide", "impersonate", "critical", "Can impersonate other identities")
@@ -1381,4 +1548,324 @@ func buildDangerousPermsSummary(data *output.PermissionsData) []output.Dangerous
 	}
 
 	return perms
+}
+
+func generateCmd() *cobra.Command {
+	var auditSource string
+	var auditPath string
+	var esEndpoint string
+	var esIndex string
+	var cwLogGroup string
+	var since string
+	var serviceAccount string
+	var outputFile string
+
+	cmd := &cobra.Command{
+		Use:   "generate",
+		Short: "Generate least-privilege RBAC roles from audit logs",
+		Long: `Analyze audit logs to generate minimal RBAC roles based on actual usage.
+This creates Role/ClusterRole YAML that grants only the permissions actually used.
+
+Examples:
+  idc generate -A --audit-source cloudwatch --log-group /aws/eks/cluster/cluster --aws-region us-west-2
+  idc generate -A --audit-source gcp --gcp-project my-project --since 30d
+  idc generate -A --audit-source file --audit-path /var/log/audit/ -f roles.yaml`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			fmt.Fprintln(os.Stderr, "Collecting cluster data...")
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			var source audit.Source
+			switch auditSource {
+			case "file":
+				source = audit.NewDirectorySource(auditPath, "*.log")
+			case "elasticsearch":
+				source = audit.NewElasticsearchSource(esEndpoint, esIndex, "", "")
+			case "cloudwatch":
+				source, err = audit.NewCloudWatchSource(ctx, audit.CloudWatchConfig{
+					LogGroup: cwLogGroup,
+					Region:   awsRegion,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to create CloudWatch source: %w", err)
+				}
+			case "gcp", "gcp-logging":
+				source, err = audit.NewGCPCloudLoggingSource(ctx, audit.GCPCloudLoggingConfig{
+					ProjectID: gcpProject,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to create GCP source: %w", err)
+				}
+			case "azure", "azure-log-analytics":
+				source, err = audit.NewAzureLogAnalyticsSource(azureSubID)
+				if err != nil {
+					return fmt.Errorf("failed to create Azure source: %w", err)
+				}
+			default:
+				return fmt.Errorf("--audit-source is required (file, elasticsearch, cloudwatch, gcp, azure)")
+			}
+			defer source.Close()
+
+			duration, err := parseDuration(since)
+			if err != nil {
+				return fmt.Errorf("invalid duration: %w", err)
+			}
+
+			fmt.Fprintln(os.Stderr, "Analyzing audit logs...")
+			analyzer := audit.NewAnalyzer(source, g)
+			queryOpts := audit.QueryOptions{
+				StartTime:     time.Now().Add(-duration),
+				EndTime:       time.Now(),
+				IncludeSystem: includeSystem,
+			}
+
+			if err := analyzer.Analyze(ctx, queryOpts); err != nil {
+				return fmt.Errorf("failed to analyze audit logs: %w", err)
+			}
+
+			fmt.Fprintln(os.Stderr, "Generating least-privilege roles...")
+
+			var roles []audit.LeastPrivilegeRole
+			if serviceAccount != "" {
+				parts := strings.SplitN(serviceAccount, "/", 2)
+				var ns, name string
+				if len(parts) == 2 {
+					ns = parts[0]
+					name = parts[1]
+				} else {
+					ns = namespace
+					name = serviceAccount
+				}
+				role := analyzer.GenerateLeastPrivilegeRoleForSA(name, ns)
+				if role != nil {
+					roles = append(roles, *role)
+				}
+			} else {
+				roles = analyzer.GenerateLeastPrivilegeRoles()
+			}
+
+			if len(roles) == 0 {
+				fmt.Println("No roles generated - no service account activity found in audit logs")
+				return nil
+			}
+
+			var out *os.File
+			if outputFile != "" {
+				out, err = os.Create(outputFile)
+				if err != nil {
+					return fmt.Errorf("failed to create output file: %w", err)
+				}
+				defer out.Close()
+			} else {
+				out = os.Stdout
+			}
+
+			fmt.Fprintf(os.Stderr, "\n=== Least-Privilege Role Generation ===\n\n")
+			fmt.Fprintf(os.Stderr, "Generated %d roles from audit log analysis\n\n", len(roles))
+
+			for _, role := range roles {
+				fmt.Fprintf(os.Stderr, "%-50s %s → %d perms (%.0f%% reduction)\n",
+					role.ServiceAccount,
+					role.RoleKind,
+					role.Reduction.NewPermissions,
+					role.Reduction.PercentReduction)
+
+				fmt.Fprintln(out, role.YAML)
+			}
+
+			if outputFile != "" {
+				fmt.Fprintf(os.Stderr, "\nYAML saved to: %s\n", outputFile)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&auditSource, "audit-source", "", "Audit log source: file, elasticsearch, cloudwatch, gcp, azure")
+	cmd.Flags().StringVar(&auditPath, "audit-path", "/var/log/kubernetes/audit/", "Path to audit log files")
+	cmd.Flags().StringVar(&esEndpoint, "es-endpoint", "", "Elasticsearch endpoint URL")
+	cmd.Flags().StringVar(&esIndex, "es-index", "kubernetes-audit-*", "Elasticsearch index pattern")
+	cmd.Flags().StringVar(&cwLogGroup, "log-group", "", "CloudWatch log group")
+	cmd.Flags().StringVar(&since, "since", "30d", "Time period to analyze (e.g., 7d, 30d)")
+	cmd.Flags().StringVar(&serviceAccount, "service-account", "", "Generate role for specific SA (namespace/name)")
+	cmd.Flags().StringVarP(&outputFile, "output-file", "f", "", "Output file for YAML (default: stdout)")
+
+	return cmd
+}
+
+func saLifecycleCmd() *cobra.Command {
+	var staleThreshold int
+
+	cmd := &cobra.Command{
+		Use:   "sa-lifecycle",
+		Short: "Analyze service account lifecycle and find orphaned/stale SAs",
+		Long: `Identify service accounts that may need cleanup:
+- Orphaned: SAs with RBAC bindings but not used by any workload
+- Unused: SAs not referenced by any workload and no bindings
+- Unbound: SAs used by workloads but have no RBAC permissions
+
+Examples:
+  idc sa-lifecycle -A
+  idc sa-lifecycle -A --include-system
+  idc sa-lifecycle -n production`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			result := analysis.AnalyzeSALifecycle(g, analysis.SALifecycleOptions{
+				StaleThresholdDays: staleThreshold,
+				IncludeSystem:      includeSystem,
+			})
+
+			fmt.Printf("=== Service Account Lifecycle Analysis ===\n\n")
+			fmt.Printf("Total Service Accounts: %d\n", result.Summary.TotalSAs)
+			fmt.Printf("Orphaned: %d\n", result.Summary.OrphanedCount)
+			fmt.Printf("Unbound (used but no perms): %d\n", result.Summary.UnboundCount)
+			fmt.Printf("Healthy: %d\n\n", result.Summary.HealthyCount)
+
+			if len(result.OrphanedSAs) > 0 {
+				fmt.Printf("ORPHANED SERVICE ACCOUNTS\n")
+				fmt.Printf("%-40s %-20s %s\n", "SERVICE ACCOUNT", "NAMESPACE", "REASON")
+				fmt.Printf("%s\n", strings.Repeat("─", 100))
+				for _, sa := range result.OrphanedSAs {
+					fmt.Printf("%-40s %-20s %s\n", sa.Name, sa.Namespace, sa.Reason)
+				}
+				fmt.Println()
+			}
+
+			if len(result.UnboundSAs) > 0 {
+				fmt.Printf("UNBOUND SERVICE ACCOUNTS (used by workloads but no RBAC)\n")
+				fmt.Printf("%-40s %-20s %s\n", "SERVICE ACCOUNT", "NAMESPACE", "USED BY")
+				fmt.Printf("%s\n", strings.Repeat("─", 100))
+				for _, sa := range result.UnboundSAs {
+					usedBy := strings.Join(sa.UsedBy, ", ")
+					if len(usedBy) > 40 {
+						usedBy = usedBy[:37] + "..."
+					}
+					fmt.Printf("%-40s %-20s %s\n", sa.Name, sa.Namespace, usedBy)
+				}
+				fmt.Println()
+			}
+
+			if len(result.OrphanedSAs) == 0 && len(result.UnboundSAs) == 0 {
+				fmt.Println("No orphaned or problematic service accounts found.")
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().IntVar(&staleThreshold, "stale-days", 30, "Days of inactivity to consider SA stale")
+
+	return cmd
+}
+
+func sccCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "scc",
+		Short: "Analyze OpenShift Security Context Constraints",
+		Long: `Analyze OpenShift SCCs (Security Context Constraints) for security issues.
+Identifies privileged SCCs, risky bindings, and potential escalation paths.
+
+This command only works on OpenShift clusters.
+
+Examples:
+  idc scc -A
+  idc scc -A --include-system`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			opts := collector.Options{
+				Namespace:      namespace,
+				AllNamespaces:  allNamespaces,
+				IncludeSystem:  includeSystem,
+				KubeConfigPath: kubeconfig,
+				KubeContext:    kubecontext,
+			}
+
+			if !collector.IsOpenShiftCluster(ctx, opts) {
+				fmt.Println("This command requires an OpenShift cluster.")
+				fmt.Println("SCCs are not available on standard Kubernetes.")
+				return nil
+			}
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			result := analysis.AnalyzeSCCs(g)
+
+			if len(result.SCCs) == 0 {
+				fmt.Println("No SCCs found in the cluster.")
+				return nil
+			}
+
+			fmt.Printf("=== OpenShift SCC Analysis ===\n\n")
+			fmt.Printf("Total SCCs: %d\n", result.Summary.TotalSCCs)
+			fmt.Printf("Privileged SCCs: %d\n", result.Summary.PrivilegedSCCs)
+			fmt.Printf("Total Bindings: %d\n", result.Summary.TotalBindings)
+			fmt.Printf("Risky Bindings: %d\n", result.Summary.RiskyBindings)
+			fmt.Printf("Escalation Paths: %d\n\n", result.Summary.EscalationPaths)
+
+			fmt.Printf("SCC RISK LEVELS\n")
+			fmt.Printf("%-30s %-10s %-6s %s\n", "SCC NAME", "RISK", "SCORE", "FLAGS")
+			fmt.Printf("%s\n", strings.Repeat("─", 100))
+			for _, scc := range result.SCCs {
+				flags := strings.Join(scc.AllowedFlags, ", ")
+				if len(flags) > 40 {
+					flags = flags[:37] + "..."
+				}
+				fmt.Printf("%-30s %-10s %-6d %s\n", scc.Name, scc.RiskLevel, scc.RiskScore, flags)
+			}
+			fmt.Println()
+
+			if len(result.RiskyBindings) > 0 {
+				fmt.Printf("RISKY SCC BINDINGS\n")
+				fmt.Printf("%-20s %-15s %-30s %s\n", "SCC", "TYPE", "SUBJECT", "RISK")
+				fmt.Printf("%s\n", strings.Repeat("─", 100))
+				for _, b := range result.RiskyBindings {
+					subject := b.SubjectName
+					if b.SubjectNS != "" {
+						subject = b.SubjectNS + "/" + b.SubjectName
+					}
+					fmt.Printf("%-20s %-15s %-30s %s\n",
+						truncate(b.SCCName, 20),
+						b.SubjectType,
+						truncate(subject, 30),
+						b.RiskLevel)
+				}
+				fmt.Println()
+			}
+
+			if len(result.EscalationPaths) > 0 {
+				fmt.Printf("SCC ESCALATION PATHS\n")
+				fmt.Printf("%-30s %-20s %-20s %s\n", "SOURCE", "TARGET SCC", "VIA", "RISK")
+				fmt.Printf("%s\n", strings.Repeat("─", 100))
+				for _, p := range result.EscalationPaths {
+					fmt.Printf("%-30s %-20s %-20s %s\n",
+						truncate(p.Source, 30),
+						truncate(p.TargetSCC, 20),
+						truncate(p.Via, 20),
+						p.RiskLevel)
+				}
+				fmt.Println()
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
 }

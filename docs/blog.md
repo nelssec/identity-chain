@@ -4,6 +4,8 @@ When a Kubernetes workload is compromised, security teams need to answer: **"Wha
 
 This is the blast radius - the total impact of a security breach spreading through the identity chain from workload to ServiceAccount to RBAC to cloud IAM.
 
+Whether you're running EKS, GKE, AKS, OpenShift, or vanilla Kubernetes - Identity Chain maps these relationships and calculates the blast radius.
+
 ## The Problem: Identity Sprawl in Cloud-Native Environments
 
 Modern Kubernetes deployments have complex identity relationships:
@@ -140,6 +142,39 @@ flowchart TD
     style E fill:#ff0000,color:#fff
     style I fill:#ff0000,color:#fff
 ```
+
+## OpenShift Security Context Constraints
+
+For OpenShift clusters, Identity Chain also analyzes Security Context Constraints (SCCs) - OpenShift's mechanism for controlling what pods can do at the container runtime level.
+
+SCCs control:
+- Privileged containers
+- Host namespace access (network, PID, IPC)
+- Volume types (hostPath, etc.)
+- User/group IDs
+- Linux capabilities
+
+```mermaid
+graph TB
+    subgraph "OpenShift SCC Analysis"
+        SCC1[privileged SCC] -->|allows| P1[hostNetwork]
+        SCC1 -->|allows| P2[privileged containers]
+        SCC1 -->|allows| P3[hostPID]
+
+        SCC2[restricted SCC] -->|enforces| R1[runAsNonRoot]
+        SCC2 -->|enforces| R2[drop ALL capabilities]
+
+        SA1[ServiceAccount] -->|can use| SCC1
+        SA2[ServiceAccount] -->|can use| SCC2
+    end
+
+    style SCC1 fill:#ff6b6b
+    style P1 fill:#ff6b6b
+    style P2 fill:#ff6b6b
+    style P3 fill:#ff6b6b
+```
+
+Identity Chain scores each SCC by risk and identifies which service accounts can use privileged SCCs - critical for understanding container escape risk.
 
 ## How Identity Chain Helps
 
@@ -374,6 +409,8 @@ open dashboard.html
 idc blast --all -A                    # Blast radius analysis
 idc whocan get secrets -A             # Who can access secrets?
 idc attack-path --all -A              # Attack path visualization
+idc scc -A                            # OpenShift SCC analysis
+idc sa-lifecycle -A                   # Find orphaned service accounts
 ```
 
 ## Conclusion
