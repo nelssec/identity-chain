@@ -14,15 +14,33 @@ const (
 	NodeNetworkPolicy  NodeType = "network_policy"
 	NodeService        NodeType = "service"
 	NodeSCC            NodeType = "scc"
+	NodeRoute          NodeType = "route"
+	NodeOAuthClient    NodeType = "oauth_client"
+	NodeBuildConfig    NodeType = "build_config"
+	NodeProject        NodeType = "project"
+
+	NodeSecret              NodeType = "secret"
+	NodeExternalSecret      NodeType = "external_secret"
+	NodeSecretProviderClass NodeType = "secret_provider_class"
+	NodePeerAuthentication  NodeType = "peer_authentication"
+	NodeAuthorizationPolicy NodeType = "authorization_policy"
+	NodeConstraintTemplate  NodeType = "constraint_template"
+	NodeConstraint          NodeType = "constraint"
+	NodeClusterPolicy       NodeType = "cluster_policy"
+	NodeOIDCProvider        NodeType = "oidc_provider"
+	NodeIdentityProvider    NodeType = "identity_provider"
+	NodeValidatingWebhook   NodeType = "validating_webhook"
+	NodeMutatingWebhook     NodeType = "mutating_webhook"
 )
 
 type Node struct {
-	ID        string            `json:"id"`
-	Type      NodeType          `json:"type"`
-	Name      string            `json:"name"`
-	Namespace string            `json:"namespace,omitempty"`
-	Labels    map[string]string `json:"labels,omitempty"`
-	Metadata  NodeMetadata      `json:"metadata,omitempty"`
+	ID          string            `json:"id"`
+	Type        NodeType          `json:"type"`
+	Name        string            `json:"name"`
+	Namespace   string            `json:"namespace,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	Metadata    NodeMetadata      `json:"metadata,omitempty"`
 }
 
 type NodeMetadata struct {
@@ -45,6 +63,10 @@ type NodeMetadata struct {
 	NetworkPolicy      *NetworkPolicyInfo  `json:"network_policy,omitempty"`
 	ServiceInfo        *ServiceInfo        `json:"service_info,omitempty"`
 	SCCInfo            *SCCInfo            `json:"scc_info,omitempty"`
+	RouteInfo          *RouteInfo          `json:"route_info,omitempty"`
+	OAuthClientInfo    *OAuthClientInfo    `json:"oauth_client_info,omitempty"`
+	BuildConfigInfo    *BuildConfigInfo    `json:"build_config_info,omitempty"`
+	ProjectInfo        *ProjectInfo        `json:"project_info,omitempty"`
 }
 
 type SCCInfo struct {
@@ -187,4 +209,43 @@ func (n *Node) HasCloudIdentity() bool {
 	return n.Metadata.CloudRoleARN != "" ||
 		n.Metadata.GCPServiceAccount != "" ||
 		n.Metadata.AzureManagedID != ""
+}
+
+type RouteInfo struct {
+	Host            string `json:"host,omitempty"`
+	Path            string `json:"path,omitempty"`
+	TLSEnabled      bool   `json:"tls_enabled,omitempty"`
+	TLSTermination  string `json:"tls_termination,omitempty"`
+	InsecurePolicy  string `json:"insecure_policy,omitempty"`
+	TargetKind      string `json:"target_kind,omitempty"`
+	TargetName      string `json:"target_name,omitempty"`
+	WildcardPolicy  string `json:"wildcard_policy,omitempty"`
+}
+
+type OAuthClientInfo struct {
+	RedirectURIs      []string `json:"redirect_uris,omitempty"`
+	GrantMethod       string   `json:"grant_method,omitempty"`
+	Scopes            []string `json:"scopes,omitempty"`
+	AccessTokenMaxAge int      `json:"access_token_max_age,omitempty"`
+}
+
+type BuildConfigInfo struct {
+	StrategyType        string   `json:"strategy_type,omitempty"`
+	Privileged          bool     `json:"privileged,omitempty"`
+	ExposesDockerSocket bool     `json:"exposes_docker_socket,omitempty"`
+	DockerfilePath      string   `json:"dockerfile_path,omitempty"`
+	BuilderImage        string   `json:"builder_image,omitempty"`
+	SourceType          string   `json:"source_type,omitempty"`
+	GitURI              string   `json:"git_uri,omitempty"`
+	SecretsUsed         []string `json:"secrets_used,omitempty"`
+	OutputImage         string   `json:"output_image,omitempty"`
+	PushSecret          string   `json:"push_secret,omitempty"`
+	ServiceAccount      string   `json:"service_account,omitempty"`
+}
+
+type ProjectInfo struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Requester   string `json:"requester,omitempty"`
+	Status      string `json:"status,omitempty"`
 }

@@ -30,6 +30,10 @@ type DashboardData struct {
 	CISCompliance     *analysis.CISComplianceSummary
 	GraphStats        graph.GraphStats
 	Graph             *graph.Graph
+	Compliance        *analysis.ComplianceResult
+	IdentityChains    *analysis.IdentityChainResult
+	GroupAnalysis     *analysis.GroupAnalysisResult
+	UsageAnalysis     *analysis.UsageAnalysisResult
 }
 
 type PermissionsData struct {
@@ -86,18 +90,22 @@ func (d *Dashboard) Generate(data DashboardData) error {
 }
 
 type dashboardJSON struct {
-	Summary       summaryData        `json:"summary"`
-	BlastRadius   blastRadiusData    `json:"blastRadius"`
-	AttackPaths   attackPathsData    `json:"attackPaths"`
-	Permissions   permissionsJSON    `json:"permissions"`
-	RBACAudit     rbacAuditData      `json:"rbacAudit"`
-	PodSecurity   podSecurityData    `json:"podSecurity"`
-	NetworkPolicy networkPolicyData  `json:"networkPolicy"`
-	CloudAudit    cloudAuditData     `json:"cloudAudit"`
-	UnusedPerms   unusedPermsData    `json:"unusedPerms"`
-	SCCData       sccJSONData        `json:"sccData"`
-	CISCompliance cisComplianceData  `json:"cisCompliance"`
-	GraphData     graphVisualization `json:"graphData"`
+	Summary        summaryData           `json:"summary"`
+	BlastRadius    blastRadiusData       `json:"blastRadius"`
+	AttackPaths    attackPathsData       `json:"attackPaths"`
+	Permissions    permissionsJSON       `json:"permissions"`
+	RBACAudit      rbacAuditData         `json:"rbacAudit"`
+	PodSecurity    podSecurityData       `json:"podSecurity"`
+	NetworkPolicy  networkPolicyData     `json:"networkPolicy"`
+	CloudAudit     cloudAuditData        `json:"cloudAudit"`
+	UnusedPerms    unusedPermsData       `json:"unusedPerms"`
+	SCCData        sccJSONData           `json:"sccData"`
+	CISCompliance  cisComplianceData     `json:"cisCompliance"`
+	GraphData      graphVisualization    `json:"graphData"`
+	Compliance     complianceJSONData    `json:"compliance"`
+	IdentityChains identityChainsData    `json:"identityChains"`
+	GroupAnalysis  groupAnalysisJSONData `json:"groupAnalysis"`
+	UsageAnalysis  usageAnalysisJSONData `json:"usageAnalysis"`
 }
 
 type cisComplianceData struct {
@@ -464,6 +472,136 @@ type graphLink struct {
 	Target string `json:"target"`
 	Type   string `json:"type"`
 	Label  string `json:"label"`
+}
+
+type complianceJSONData struct {
+	Frameworks        []frameworkComplianceJSON `json:"frameworks"`
+	TotalGaps         int                       `json:"totalGaps"`
+	CriticalGaps      int                       `json:"criticalGaps"`
+	OverallScore      float64                   `json:"overallScore"`
+	RemediationCount  int                       `json:"remediationCount"`
+}
+
+type frameworkComplianceJSON struct {
+	Name            string               `json:"name"`
+	Score           float64              `json:"score"`
+	TotalControls   int                  `json:"totalControls"`
+	PassedControls  int                  `json:"passedControls"`
+	FailedControls  int                  `json:"failedControls"`
+	Gaps            []complianceGapJSON  `json:"gaps"`
+}
+
+type complianceGapJSON struct {
+	ControlID   string `json:"controlId"`
+	Title       string `json:"title"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+	Remediation string `json:"remediation"`
+}
+
+type identityChainsData struct {
+	Chains           []identityChainJSON `json:"chains"`
+	TotalChains      int                 `json:"totalChains"`
+	CrossAccountRisk int                 `json:"crossAccountRisk"`
+	MaxDepth         int                 `json:"maxDepth"`
+	DOTOutput        string              `json:"dotOutput"`
+	MermaidOutput    string              `json:"mermaidOutput"`
+}
+
+type identityChainJSON struct {
+	WorkloadName   string              `json:"workloadName"`
+	WorkloadNS     string              `json:"workloadNs"`
+	ServiceAccount string              `json:"serviceAccount"`
+	Steps          []chainStepJSON     `json:"steps"`
+	RiskLevel      string              `json:"riskLevel"`
+	CloudResources []string            `json:"cloudResources"`
+}
+
+type chainStepJSON struct {
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type groupAnalysisJSONData struct {
+	Groups              []groupInfoJSON     `json:"groups"`
+	TotalGroups         int                 `json:"totalGroups"`
+	HighRiskGroups      int                 `json:"highRiskGroups"`
+	EscalationPaths     int                 `json:"escalationPaths"`
+	OIDCMappings        int                 `json:"oidcMappings"`
+	GroupEscalations    []groupEscJSON      `json:"groupEscalations"`
+}
+
+type groupInfoJSON struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	MemberCount int      `json:"memberCount"`
+	RiskLevel   string   `json:"riskLevel"`
+	Permissions []string `json:"permissions"`
+	IsClusterWide bool   `json:"isClusterWide"`
+}
+
+type groupEscJSON struct {
+	SourceGroup string `json:"sourceGroup"`
+	TargetGroup string `json:"targetGroup"`
+	Path        string `json:"path"`
+	RiskLevel   string `json:"riskLevel"`
+}
+
+type usageAnalysisJSONData struct {
+	UnusedSAs           []unusedSAJSON       `json:"unusedSAs"`
+	OrphanedIdentities  []orphanedIDJSON     `json:"orphanedIdentities"`
+	OverProvisionedSAs  []overProvisionJSON  `json:"overProvisionedSAs"`
+	StaleIdentities     []staleIDJSON        `json:"staleIdentities"`
+	Recommendations     []recommendationJSON `json:"recommendations"`
+	Summary             usageSummaryJSON     `json:"summary"`
+}
+
+type unusedSAJSON struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	AgeDays   int    `json:"ageDays"`
+	Reason    string `json:"reason"`
+}
+
+type orphanedIDJSON struct {
+	Name      string   `json:"name"`
+	Namespace string   `json:"namespace"`
+	Bindings  []string `json:"bindings"`
+	Reason    string   `json:"reason"`
+}
+
+type overProvisionJSON struct {
+	Name             string  `json:"name"`
+	Namespace        string  `json:"namespace"`
+	GrantedPerms     int     `json:"grantedPerms"`
+	UsedPerms        int     `json:"usedPerms"`
+	UnusedPerms      int     `json:"unusedPerms"`
+	OverProvisionPct float64 `json:"overProvisionPct"`
+}
+
+type staleIDJSON struct {
+	Name         string `json:"name"`
+	Namespace    string `json:"namespace"`
+	LastUsedDays int    `json:"lastUsedDays"`
+	RiskLevel    string `json:"riskLevel"`
+}
+
+type recommendationJSON struct {
+	Identity    string `json:"identity"`
+	Namespace   string `json:"namespace"`
+	Action      string `json:"action"`
+	Description string `json:"description"`
+	Impact      string `json:"impact"`
+}
+
+type usageSummaryJSON struct {
+	TotalSAs          int     `json:"totalSAs"`
+	UnusedSAs         int     `json:"unusedSAs"`
+	OrphanedCount     int     `json:"orphanedCount"`
+	OverProvisionedCt int     `json:"overProvisionedCt"`
+	StaleCount        int     `json:"staleCount"`
+	HealthScore       float64 `json:"healthScore"`
 }
 
 func (d *Dashboard) buildDashboardData(data DashboardData) dashboardJSON {
@@ -1090,6 +1228,182 @@ func (d *Dashboard) buildDashboardData(data DashboardData) dashboardJSON {
 		sort.Slice(result.CISCompliance.Controls, func(i, j int) bool {
 			return result.CISCompliance.Controls[i].ID < result.CISCompliance.Controls[j].ID
 		})
+	}
+
+	if data.Compliance != nil {
+		result.Compliance.TotalGaps = len(data.Compliance.CriticalGaps) + data.Compliance.Summary.HighGapsCount
+		result.Compliance.CriticalGaps = data.Compliance.Summary.CriticalGapsCount
+		result.Compliance.OverallScore = data.Compliance.OverallScore
+		result.Compliance.RemediationCount = len(data.Compliance.Recommendations)
+
+		for _, fw := range data.Compliance.Frameworks {
+			fwJSON := frameworkComplianceJSON{
+				Name:           fw.Name,
+				Score:          fw.CompliancePercent,
+				TotalControls:  fw.TotalControls,
+				PassedControls: fw.PassedControls,
+				FailedControls: fw.FailedControls,
+			}
+			for _, gap := range fw.TopGaps {
+				fwJSON.Gaps = append(fwJSON.Gaps, complianceGapJSON{
+					ControlID:   gap.ControlID,
+					Title:       gap.ControlTitle,
+					Severity:    string(gap.Severity),
+					Description: gap.Finding,
+					Remediation: gap.Remediation,
+				})
+			}
+			result.Compliance.Frameworks = append(result.Compliance.Frameworks, fwJSON)
+		}
+	}
+
+	if data.IdentityChains != nil {
+		result.IdentityChains.TotalChains = data.IdentityChains.Summary.TotalChains
+		result.IdentityChains.CrossAccountRisk = data.IdentityChains.CrossAccountChains
+		result.IdentityChains.MaxDepth = data.IdentityChains.Summary.MaxChainDepth
+		result.IdentityChains.DOTOutput = data.IdentityChains.DOTOutput
+		result.IdentityChains.MermaidOutput = data.IdentityChains.MermaidOutput
+
+		for _, chain := range data.IdentityChains.Chains {
+			saName := ""
+			if chain.ServiceAccount != nil {
+				saName = chain.ServiceAccount.Name
+			}
+			chainJSON := identityChainJSON{
+				WorkloadName:   chain.WorkloadName,
+				WorkloadNS:     chain.WorkloadNamespace,
+				ServiceAccount: saName,
+			}
+			chainJSON.Steps = append(chainJSON.Steps, chainStepJSON{
+				Type: "Workload",
+				Name: chain.WorkloadName,
+			})
+			if chain.ServiceAccount != nil {
+				chainJSON.Steps = append(chainJSON.Steps, chainStepJSON{
+					Type: "ServiceAccount",
+					Name: chain.ServiceAccount.Name,
+				})
+			}
+			for _, role := range chain.K8sRoles {
+				chainJSON.Steps = append(chainJSON.Steps, chainStepJSON{
+					Type: "Role",
+					Name: role.Name,
+				})
+			}
+			for _, cr := range chain.CloudRoles {
+				chainJSON.Steps = append(chainJSON.Steps, chainStepJSON{
+					Type: "IAMRole",
+					Name: cr.RoleARN,
+				})
+			}
+			for _, res := range chain.CloudResources {
+				chainJSON.CloudResources = append(chainJSON.CloudResources, res.ResourceType+":"+res.ResourceARN)
+			}
+			result.IdentityChains.Chains = append(result.IdentityChains.Chains, chainJSON)
+		}
+	}
+
+	if data.GroupAnalysis != nil {
+		result.GroupAnalysis.TotalGroups = data.GroupAnalysis.Summary.TotalGroups
+		result.GroupAnalysis.HighRiskGroups = data.GroupAnalysis.Summary.HighRiskGroups
+		result.GroupAnalysis.EscalationPaths = data.GroupAnalysis.Summary.PrivEscPaths
+		result.GroupAnalysis.OIDCMappings = data.GroupAnalysis.Summary.OIDCMappings
+
+		for _, g := range data.GroupAnalysis.Groups {
+			gJSON := groupInfoJSON{
+				Name:        g.Name,
+				Type:        g.Type,
+				MemberCount: g.MemberCount,
+				RiskLevel:   g.RiskLevel,
+			}
+			for _, role := range g.EffectiveRoles {
+				gJSON.Permissions = append(gJSON.Permissions, role.RoleName)
+				if role.IsClusterRole {
+					gJSON.IsClusterWide = true
+				}
+			}
+			result.GroupAnalysis.Groups = append(result.GroupAnalysis.Groups, gJSON)
+		}
+
+		for _, esc := range data.GroupAnalysis.PrivilegeEscalation {
+			result.GroupAnalysis.GroupEscalations = append(result.GroupAnalysis.GroupEscalations, groupEscJSON{
+				SourceGroup: esc.Group,
+				TargetGroup: esc.TargetRole,
+				Path:        strings.Join(esc.EscalationPath, " -> "),
+				RiskLevel:   esc.Severity,
+			})
+		}
+	}
+
+	if data.UsageAnalysis != nil {
+		healthScore := 100.0
+		total := data.UsageAnalysis.Summary.TotalServiceAccounts
+		if total > 0 {
+			unhealthy := data.UsageAnalysis.Summary.UnusedCount +
+				data.UsageAnalysis.Summary.OrphanedCount +
+				data.UsageAnalysis.Summary.OverProvisionedCount +
+				data.UsageAnalysis.Summary.StaleCount
+			healthScore = 100.0 - (float64(unhealthy)/float64(total))*100.0
+			if healthScore < 0 {
+				healthScore = 0
+			}
+		}
+		result.UsageAnalysis.Summary = usageSummaryJSON{
+			TotalSAs:          data.UsageAnalysis.Summary.TotalServiceAccounts,
+			UnusedSAs:         data.UsageAnalysis.Summary.UnusedCount,
+			OrphanedCount:     data.UsageAnalysis.Summary.OrphanedCount,
+			OverProvisionedCt: data.UsageAnalysis.Summary.OverProvisionedCount,
+			StaleCount:        data.UsageAnalysis.Summary.StaleCount,
+			HealthScore:       healthScore,
+		}
+
+		for _, sa := range data.UsageAnalysis.UnusedServiceAccounts {
+			result.UsageAnalysis.UnusedSAs = append(result.UsageAnalysis.UnusedSAs, unusedSAJSON{
+				Name:      sa.Name,
+				Namespace: sa.Namespace,
+				AgeDays:   sa.CreatedDaysAgo,
+				Reason:    sa.Reason,
+			})
+		}
+
+		for _, o := range data.UsageAnalysis.OrphanedIdentities {
+			result.UsageAnalysis.OrphanedIdentities = append(result.UsageAnalysis.OrphanedIdentities, orphanedIDJSON{
+				Name:      o.Name,
+				Namespace: o.Namespace,
+				Bindings:  o.RoleBindings,
+				Reason:    o.OrphanReason,
+			})
+		}
+
+		for _, op := range data.UsageAnalysis.OverProvisionedAccounts {
+			result.UsageAnalysis.OverProvisionedSAs = append(result.UsageAnalysis.OverProvisionedSAs, overProvisionJSON{
+				Name:             op.Name,
+				Namespace:        op.Namespace,
+				GrantedPerms:     op.GrantedPerms,
+				UsedPerms:        op.UsedPerms,
+				UnusedPerms:      op.UnusedPerms,
+				OverProvisionPct: op.OverProvisionRate,
+			})
+		}
+
+		for _, st := range data.UsageAnalysis.StaleIdentities {
+			result.UsageAnalysis.StaleIdentities = append(result.UsageAnalysis.StaleIdentities, staleIDJSON{
+				Name:         st.Name,
+				Namespace:    st.Namespace,
+				LastUsedDays: st.LastUsedDays,
+				RiskLevel:    st.RiskLevel,
+			})
+		}
+
+		for _, rec := range data.UsageAnalysis.RightSizingRecommendations {
+			result.UsageAnalysis.Recommendations = append(result.UsageAnalysis.Recommendations, recommendationJSON{
+				Identity:    rec.Identity,
+				Namespace:   rec.Namespace,
+				Action:      "Right-size permissions",
+				Description: rec.Reason,
+				Impact:      rec.ImpactLevel,
+			})
+		}
 	}
 
 	return result
@@ -1730,6 +2044,390 @@ const dashboardHTMLTemplate = `<!DOCTYPE html>
       .header { padding: 20px 24px; flex-direction: column; gap: 16px; }
       .container { padding: 20px; }
     }
+
+    /* Enhanced Grid Layouts */
+    .grid-auto-fit {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+
+    .grid-2col {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+    }
+
+    .grid-3col {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    @media (max-width: 1024px) {
+      .grid-2col, .grid-3col { grid-template-columns: 1fr; }
+    }
+
+    /* Smooth Card Component */
+    .smooth-card {
+      background: linear-gradient(145deg, rgba(22, 27, 34, 0.95), rgba(30, 37, 46, 0.9));
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-xl);
+      padding: 24px;
+      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .smooth-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--accent-gradient);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .smooth-card:hover {
+      border-color: rgba(88, 166, 255, 0.3);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4), 0 0 40px rgba(88, 166, 255, 0.1);
+      transform: translateY(-4px);
+    }
+
+    .smooth-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    .smooth-card-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .smooth-card-title .icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+
+    /* Chain Flow Visualization */
+    .chain-flow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 16px 0;
+    }
+
+    .chain-node {
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 12px 16px;
+      transition: all 0.3s ease;
+      position: relative;
+    }
+
+    .chain-node:hover {
+      border-color: var(--accent-blue);
+      transform: scale(1.05);
+      box-shadow: 0 8px 25px rgba(88, 166, 255, 0.2);
+    }
+
+    .chain-node-type {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .chain-node-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      word-break: break-all;
+    }
+
+    .chain-node.workload { --node-color: #58a6ff; }
+    .chain-node.serviceaccount { --node-color: #a371f7; }
+    .chain-node.role { --node-color: #39d4ff; }
+    .chain-node.iamrole { --node-color: #3fb950; }
+    .chain-node.resource { --node-color: #f0883e; }
+
+    .chain-node .chain-node-type { color: var(--node-color); }
+    .chain-node:hover { border-color: var(--node-color); box-shadow: 0 8px 25px color-mix(in srgb, var(--node-color) 25%%, transparent); }
+
+    .chain-arrow {
+      color: var(--text-muted);
+      font-size: 18px;
+      opacity: 0.6;
+      animation: arrowPulse 2s infinite;
+    }
+
+    @keyframes arrowPulse {
+      0%%, 100%% { opacity: 0.4; transform: translateX(0); }
+      50%% { opacity: 1; transform: translateX(3px); }
+    }
+
+    /* Progress Ring */
+    .progress-ring {
+      position: relative;
+      width: 120px;
+      height: 120px;
+    }
+
+    .progress-ring svg {
+      transform: rotate(-90deg);
+    }
+
+    .progress-ring-bg {
+      fill: none;
+      stroke: var(--border-subtle);
+      stroke-width: 8;
+    }
+
+    .progress-ring-fill {
+      fill: none;
+      stroke-width: 8;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .progress-ring-text {
+      position: absolute;
+      top: 50%%;
+      left: 50%%;
+      transform: translate(-50%%, -50%%);
+      text-align: center;
+    }
+
+    .progress-ring-value {
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .progress-ring-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 4px;
+    }
+
+    /* Interactive Graph Container */
+    .graph-container {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-xl);
+      padding: 20px;
+      margin-top: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .graph-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .graph-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .graph-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .graph-btn {
+      background: rgba(88, 166, 255, 0.1);
+      border: 1px solid rgba(88, 166, 255, 0.3);
+      border-radius: 6px;
+      padding: 6px 12px;
+      color: var(--accent-blue);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .graph-btn:hover {
+      background: rgba(88, 166, 255, 0.2);
+      border-color: var(--accent-blue);
+    }
+
+    .graph-svg {
+      width: 100%%;
+      height: 500px;
+      background: rgba(13, 17, 23, 0.5);
+      border-radius: var(--radius-md);
+    }
+
+    .graph-svg .node circle {
+      stroke-width: 2px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .graph-svg .node:hover circle {
+      stroke-width: 4px;
+      filter: drop-shadow(0 0 8px currentColor);
+    }
+
+    .graph-svg .node text {
+      font-size: 10px;
+      fill: var(--text-secondary);
+      pointer-events: none;
+    }
+
+    .graph-svg .link {
+      stroke: var(--border-subtle);
+      stroke-opacity: 0.6;
+      stroke-width: 1.5px;
+    }
+
+    .graph-svg .link:hover {
+      stroke: var(--accent-blue);
+      stroke-opacity: 1;
+    }
+
+    /* Copy Button */
+    .copy-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(88, 166, 255, 0.15);
+      border: 1px solid rgba(88, 166, 255, 0.3);
+      border-radius: 6px;
+      padding: 8px 14px;
+      color: var(--accent-blue);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .copy-btn:hover {
+      background: rgba(88, 166, 255, 0.25);
+      border-color: var(--accent-blue);
+      transform: translateY(-1px);
+    }
+
+    .copy-btn.copied {
+      background: rgba(63, 185, 80, 0.2);
+      border-color: rgba(63, 185, 80, 0.5);
+      color: #3fb950;
+    }
+
+    /* Code Block */
+    .code-block {
+      position: relative;
+      background: rgba(13, 17, 23, 0.8);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      margin-top: 16px;
+    }
+
+    .code-block pre {
+      padding: 16px;
+      overflow-x: auto;
+      color: var(--text-secondary);
+      font-family: 'SF Mono', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      margin: 0;
+      max-height: 300px;
+    }
+
+    /* Recommendation Cards */
+    .rec-card {
+      background: linear-gradient(135deg, rgba(88, 166, 255, 0.08), rgba(163, 113, 247, 0.05));
+      border: 1px solid rgba(88, 166, 255, 0.2);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      transition: all 0.3s ease;
+    }
+
+    .rec-card:hover {
+      border-color: rgba(88, 166, 255, 0.4);
+      transform: translateX(4px);
+      box-shadow: -4px 0 20px rgba(88, 166, 255, 0.1);
+    }
+
+    .rec-identity {
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+    }
+
+    .rec-action {
+      color: var(--accent-blue);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .rec-desc {
+      color: var(--text-secondary);
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    .rec-impact {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 8px;
+    }
+
+    .rec-impact.critical { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+    .rec-impact.high { background: rgba(240, 136, 62, 0.15); color: #f0883e; }
+    .rec-impact.medium { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+    .rec-impact.low { background: rgba(63, 185, 80, 0.15); color: #3fb950; }
+
+    /* Smooth Animations */
+    @keyframes slideInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes slideInLeft {
+      from { opacity: 0; transform: translateX(-20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    .animate-in {
+      animation: slideInUp 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+
+    .stagger-1 { animation-delay: 0.1s; }
+    .stagger-2 { animation-delay: 0.2s; }
+    .stagger-3 { animation-delay: 0.3s; }
+    .stagger-4 { animation-delay: 0.4s; }
   </style>
 </head>
 <body>
@@ -1791,6 +2489,10 @@ const dashboardHTMLTemplate = `<!DOCTYPE html>
       <button class="tab" data-panel="netpol" onclick="showPanel('netpol')">Network Policy</button>
       <button class="tab" data-panel="cloud" onclick="showPanel('cloud')">Cloud IAM</button>
       <button class="tab" data-panel="unused" onclick="showPanel('unused')">Unused Perms</button>
+      <button class="tab" data-panel="compliance" onclick="showPanel('compliance')">Compliance</button>
+      <button class="tab" data-panel="chains" onclick="showPanel('chains')">Identity Chains</button>
+      <button class="tab" data-panel="groups" onclick="showPanel('groups')">Groups</button>
+      <button class="tab" data-panel="usage" onclick="showPanel('usage')">Usage Analysis</button>
     </div>
 
     <div id="panel-overview" class="panel active"></div>
@@ -1802,6 +2504,10 @@ const dashboardHTMLTemplate = `<!DOCTYPE html>
     <div id="panel-podsec" class="panel"></div>
     <div id="panel-netpol" class="panel"></div>
     <div id="panel-cloud" class="panel"></div>
+    <div id="panel-compliance" class="panel"></div>
+    <div id="panel-chains" class="panel"></div>
+    <div id="panel-groups" class="panel"></div>
+    <div id="panel-usage" class="panel"></div>
   </div>
 
   <!-- Modal -->
@@ -2948,6 +3654,418 @@ function renderPermissions() {
   document.getElementById('panel-permissions').innerHTML = html;
 }
 
+function renderCompliance() {
+  let html = '<div class="section-header"><div class="section-title">Compliance Framework Analysis</div></div>';
+
+  const comp = data.compliance;
+  if (!comp || !comp.frameworks?.length) {
+    html += '<div class="empty-state"><div class="empty-title">No compliance data available</div>';
+    html += '<div style="color:#94a3b8;margin-top:8px">Run smart-scan to generate compliance analysis.</div></div>';
+    document.getElementById('panel-compliance').innerHTML = html;
+    return;
+  }
+
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">';
+  html += '<div class="stat-card"><div class="stat-value paths">' + comp.overallScore.toFixed(1) + '%%</div><div class="stat-label">Overall Score</div></div>';
+  html += '<div class="stat-card"><div class="stat-value critical">' + comp.criticalGaps + '</div><div class="stat-label">Critical Gaps</div></div>';
+  html += '<div class="stat-card"><div class="stat-value high">' + comp.totalGaps + '</div><div class="stat-label">Total Gaps</div></div>';
+  html += '<div class="stat-card"><div class="stat-value workloads">' + comp.remediationCount + '</div><div class="stat-label">Remediations</div></div>';
+  html += '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(450px,1fr));gap:20px">';
+  comp.frameworks.forEach(fw => {
+    const scoreColor = fw.score >= 80 ? '#22c55e' : fw.score >= 60 ? '#eab308' : '#ef4444';
+    html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:16px;padding:20px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+    html += '<div style="font-size:18px;font-weight:700;color:#f1f5f9">' + e(fw.name) + '</div>';
+    html += '<div style="font-size:24px;font-weight:700;color:' + scoreColor + '">' + fw.score.toFixed(1) + '%%</div>';
+    html += '</div>';
+    html += '<div class="risk-meter"><div class="risk-meter-fill" style="width:' + fw.score + '%%;background:' + scoreColor + '"></div></div>';
+    html += '<div style="display:flex;gap:12px;margin-top:12px;color:#94a3b8;font-size:13px">';
+    html += '<span>' + fw.passedControls + ' passed</span>';
+    html += '<span>' + fw.failedControls + ' failed</span>';
+    html += '<span>' + fw.totalControls + ' total</span>';
+    html += '</div>';
+    if (fw.gaps?.length > 0) {
+      html += '<div style="margin-top:16px;border-top:1px solid rgba(51,65,85,0.5);padding-top:16px">';
+      html += '<div style="font-size:14px;font-weight:600;color:#f1f5f9;margin-bottom:12px">Gaps (' + fw.gaps.length + ')</div>';
+      fw.gaps.slice(0, 5).forEach(gap => {
+        const sColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308'}[gap.severity] || '#94a3b8';
+        html += '<div style="padding:10px;background:rgba(15,23,42,0.5);border-radius:8px;margin-bottom:8px">';
+        html += '<div style="display:flex;align-items:center;gap:8px">';
+        html += '<span style="background:' + sColor + '22;color:' + sColor + ';padding:2px 6px;border-radius:4px;font-size:11px">' + gap.severity + '</span>';
+        html += '<span style="color:#f1f5f9;font-weight:500;font-size:13px">' + e(gap.controlId) + '</span>';
+        html += '</div>';
+        html += '<div style="color:#94a3b8;font-size:12px;margin-top:4px">' + e(gap.title) + '</div>';
+        html += '</div>';
+      });
+      if (fw.gaps.length > 5) html += '<div style="color:#64748b;font-size:12px;text-align:center">... and ' + (fw.gaps.length - 5) + ' more</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+
+  document.getElementById('panel-compliance').innerHTML = html;
+}
+
+function renderChains() {
+  let html = '<div class="section-header"><div class="section-title">Identity Chain Analysis</div></div>';
+
+  const chains = data.identityChains;
+  if (!chains || !chains.chains?.length) {
+    html += '<div class="empty-state"><div class="empty-title">No identity chains found</div>';
+    html += '<div style="color:#94a3b8;margin-top:8px">Identity chains trace the path from workloads to cloud resources.</div></div>';
+    document.getElementById('panel-chains').innerHTML = html;
+    return;
+  }
+
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">';
+  html += '<div class="stat-card animate-in stagger-1"><div class="stat-value workloads">' + chains.totalChains + '</div><div class="stat-label">Total Chains</div></div>';
+  html += '<div class="stat-card animate-in stagger-2"><div class="stat-value critical">' + chains.crossAccountRisk + '</div><div class="stat-label">Cross-Account</div></div>';
+  html += '<div class="stat-card animate-in stagger-3"><div class="stat-value paths">' + chains.maxDepth + '</div><div class="stat-label">Max Depth</div></div>';
+  html += '<div class="stat-card animate-in stagger-4"><div class="stat-value cloud">' + (chains.chains.filter(c => c.cloudResources?.length > 0).length || 0) + '</div><div class="stat-label">With Cloud Access</div></div>';
+  html += '</div>';
+
+  html += '<div class="graph-container">';
+  html += '<div class="graph-header">';
+  html += '<div class="graph-title">Interactive Identity Graph</div>';
+  html += '<div class="graph-controls">';
+  html += '<button class="graph-btn" onclick="resetGraphZoom()">Reset Zoom</button>';
+  html += '<button class="graph-btn" onclick="toggleGraphLabels()">Toggle Labels</button>';
+  html += '</div></div>';
+  html += '<svg id="chains-graph" class="graph-svg"></svg>';
+  html += '</div>';
+
+  html += '<div class="grid-auto-fit" style="margin-top:24px">';
+  chains.chains.slice(0, 12).forEach((chain, idx) => {
+    const riskColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308','low':'#22c55e'}[chain.riskLevel] || '#94a3b8';
+    html += '<div class="smooth-card animate-in" style="animation-delay:' + (idx * 0.05) + 's">';
+    html += '<div class="smooth-card-title">';
+    html += '<div class="icon" style="background:' + riskColor + '22;color:' + riskColor + '">⛓</div>';
+    html += '<span>' + e(chain.workloadName) + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:#64748b;margin-bottom:12px">' + e(chain.workloadNs) + ' • SA: ' + e(chain.serviceAccount || 'default') + '</div>';
+
+    if (chain.steps?.length > 0) {
+      html += '<div class="chain-flow">';
+      chain.steps.forEach((step, i) => {
+        const nodeClass = step.type.toLowerCase();
+        html += '<div class="chain-node ' + nodeClass + '">';
+        html += '<div class="chain-node-type">' + step.type + '</div>';
+        html += '<div class="chain-node-name">' + e(step.name.length > 25 ? step.name.substring(0,22) + '...' : step.name) + '</div>';
+        html += '</div>';
+        if (i < chain.steps.length - 1) html += '<span class="chain-arrow">→</span>';
+      });
+      html += '</div>';
+    }
+
+    if (chain.cloudResources?.length > 0) {
+      html += '<div style="border-top:1px solid rgba(51,65,85,0.5);padding-top:12px;margin-top:12px">';
+      html += '<div style="font-size:11px;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Cloud Resources</div>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+      chain.cloudResources.slice(0, 3).forEach(res => {
+        html += '<span style="background:rgba(34,197,94,0.12);color:#3fb950;padding:5px 10px;border-radius:6px;font-size:11px;font-family:monospace;border:1px solid rgba(34,197,94,0.2)">' + e(res.length > 30 ? res.substring(0,27) + '...' : res) + '</span>';
+      });
+      if (chain.cloudResources.length > 3) html += '<span style="color:#64748b;font-size:11px">+' + (chain.cloudResources.length - 3) + ' more</span>';
+      html += '</div></div>';
+    }
+    html += '</div>';
+  });
+  if (chains.chains.length > 12) {
+    html += '<div class="smooth-card" style="display:flex;align-items:center;justify-content:center;min-height:200px;cursor:pointer" onclick="showAllChains()">';
+    html += '<div style="text-align:center"><div style="font-size:32px;color:#58a6ff;margin-bottom:8px">+' + (chains.chains.length - 12) + '</div>';
+    html += '<div style="color:#94a3b8;font-size:13px">More identity chains</div></div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  if (chains.dotOutput || chains.mermaidOutput) {
+    html += '<div class="grid-2col" style="margin-top:24px">';
+    if (chains.dotOutput) {
+      html += '<div class="code-block">';
+      html += '<button class="copy-btn" onclick="copyCode(this, \'dot\')"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg> Copy DOT</button>';
+      html += '<div style="padding:12px 16px;border-bottom:1px solid rgba(51,65,85,0.5);font-size:13px;font-weight:600;color:#f1f5f9">DOT Graph (Graphviz)</div>';
+      html += '<pre id="dot-code">' + e(chains.dotOutput) + '</pre>';
+      html += '</div>';
+    }
+    if (chains.mermaidOutput) {
+      html += '<div class="code-block">';
+      html += '<button class="copy-btn" onclick="copyCode(this, \'mermaid\')"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg> Copy Mermaid</button>';
+      html += '<div style="padding:12px 16px;border-bottom:1px solid rgba(51,65,85,0.5);font-size:13px;font-weight:600;color:#f1f5f9">Mermaid Diagram</div>';
+      html += '<pre id="mermaid-code">' + e(chains.mermaidOutput) + '</pre>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  document.getElementById('panel-chains').innerHTML = html;
+  renderChainsGraph(chains);
+}
+
+function copyCode(btn, type) {
+  const code = document.getElementById(type + '-code').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.classList.add('copied');
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg> Copied!';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg> Copy ' + (type === 'dot' ? 'DOT' : 'Mermaid');
+    }, 2000);
+  });
+}
+
+let graphSimulation = null;
+let showLabels = true;
+
+function renderChainsGraph(chains) {
+  const svg = d3.select('#chains-graph');
+  const width = svg.node()?.getBoundingClientRect().width || 800;
+  const height = 500;
+
+  svg.selectAll('*').remove();
+
+  const nodes = [];
+  const links = [];
+  const nodeMap = new Map();
+
+  chains.chains.slice(0, 30).forEach(chain => {
+    let prevId = null;
+    chain.steps?.forEach(step => {
+      const id = step.type + ':' + step.name;
+      if (!nodeMap.has(id)) {
+        nodeMap.set(id, { id, name: step.name, type: step.type.toLowerCase() });
+        nodes.push(nodeMap.get(id));
+      }
+      if (prevId) {
+        links.push({ source: prevId, target: id });
+      }
+      prevId = id;
+    });
+  });
+
+  const colorMap = {
+    workload: '#58a6ff', serviceaccount: '#a371f7', role: '#39d4ff',
+    iamrole: '#3fb950', resource: '#f0883e'
+  };
+
+  graphSimulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(80))
+    .force('charge', d3.forceManyBody().strength(-200))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(30));
+
+  const g = svg.append('g');
+
+  const zoom = d3.zoom()
+    .scaleExtent([0.2, 4])
+    .on('zoom', (event) => g.attr('transform', event.transform));
+  svg.call(zoom);
+
+  const link = g.append('g')
+    .selectAll('line')
+    .data(links)
+    .enter().append('line')
+    .attr('class', 'link')
+    .attr('stroke', 'rgba(88,166,255,0.3)')
+    .attr('stroke-width', 1.5);
+
+  const node = g.append('g')
+    .selectAll('g')
+    .data(nodes)
+    .enter().append('g')
+    .attr('class', 'node')
+    .call(d3.drag()
+      .on('start', (event, d) => {
+        if (!event.active) graphSimulation.alphaTarget(0.3).restart();
+        d.fx = d.x; d.fy = d.y;
+      })
+      .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+      .on('end', (event, d) => {
+        if (!event.active) graphSimulation.alphaTarget(0);
+        d.fx = null; d.fy = null;
+      }));
+
+  node.append('circle')
+    .attr('r', 12)
+    .attr('fill', d => colorMap[d.type] || '#94a3b8')
+    .attr('stroke', d => colorMap[d.type] || '#94a3b8')
+    .attr('stroke-opacity', 0.3)
+    .attr('stroke-width', 4);
+
+  node.append('text')
+    .attr('class', 'node-label')
+    .attr('dx', 16)
+    .attr('dy', 4)
+    .text(d => d.name.length > 20 ? d.name.substring(0,17) + '...' : d.name)
+    .attr('fill', '#94a3b8')
+    .attr('font-size', '10px');
+
+  graphSimulation.on('tick', () => {
+    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    node.attr('transform', d => 'translate(' + d.x + ',' + d.y + ')');
+  });
+
+  window.resetGraphZoom = () => svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity);
+  window.toggleGraphLabels = () => {
+    showLabels = !showLabels;
+    svg.selectAll('.node-label').style('display', showLabels ? 'block' : 'none');
+  };
+}
+
+function renderGroups() {
+  let html = '<div class="section-header"><div class="section-title">Group & Permission Analysis</div></div>';
+
+  const groups = data.groupAnalysis;
+  if (!groups || !groups.groups?.length) {
+    html += '<div class="empty-state"><div class="empty-title">No group data available</div>';
+    html += '<div style="color:#94a3b8;margin-top:8px">Group analysis shows OIDC/LDAP group bindings and privilege escalation paths.</div></div>';
+    document.getElementById('panel-groups').innerHTML = html;
+    return;
+  }
+
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">';
+  html += '<div class="stat-card"><div class="stat-value workloads">' + groups.totalGroups + '</div><div class="stat-label">Total Groups</div></div>';
+  html += '<div class="stat-card"><div class="stat-value critical">' + groups.highRiskGroups + '</div><div class="stat-label">High Risk Groups</div></div>';
+  html += '<div class="stat-card"><div class="stat-value high">' + groups.escalationPaths + '</div><div class="stat-label">Escalation Paths</div></div>';
+  html += '<div class="stat-card"><div class="stat-value paths">' + groups.oidcMappings + '</div><div class="stat-label">OIDC Mappings</div></div>';
+  html += '</div>';
+
+  if (groups.groupEscalations?.length > 0) {
+    html += '<div style="background:rgba(248,81,73,0.1);border:1px solid rgba(248,81,73,0.3);border-radius:12px;padding:20px;margin-bottom:20px">';
+    html += '<div style="font-size:16px;font-weight:700;color:#f85149;margin-bottom:16px">Privilege Escalation Paths</div>';
+    html += '<div style="display:grid;gap:12px">';
+    groups.groupEscalations.forEach(esc => {
+      const rColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308'}[esc.riskLevel] || '#94a3b8';
+      html += '<div style="display:flex;align-items:center;gap:12px;background:rgba(15,23,42,0.5);padding:12px 16px;border-radius:8px">';
+      html += '<span style="color:#94a3b8;font-weight:500">' + e(esc.sourceGroup) + '</span>';
+      html += '<span style="color:#58a6ff">→</span>';
+      html += '<span style="color:#f1f5f9;font-weight:500">' + e(esc.targetGroup) + '</span>';
+      html += '<span style="background:' + rColor + '22;color:' + rColor + ';padding:2px 8px;border-radius:4px;font-size:11px;margin-left:auto">' + esc.riskLevel + '</span>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+  }
+
+  html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:12px;padding:20px">';
+  html += '<div style="font-size:16px;font-weight:700;color:#f1f5f9;margin-bottom:16px">All Groups</div>';
+  html += '<table style="width:100%%;border-collapse:collapse">';
+  html += '<thead><tr style="border-bottom:1px solid rgba(51,65,85,0.5)">';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Group Name</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Type</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Members</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Scope</th>';
+  html += '<th style="text-align:left;padding:12px;color:#94a3b8;font-weight:600">Risk</th>';
+  html += '</tr></thead><tbody>';
+  groups.groups.forEach(g => {
+    const rColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308','low':'#22c55e'}[g.riskLevel] || '#94a3b8';
+    html += '<tr style="border-bottom:1px solid rgba(51,65,85,0.3)">';
+    html += '<td style="padding:12px;color:#f1f5f9;font-weight:500">' + e(g.name) + '</td>';
+    html += '<td style="padding:12px;color:#94a3b8">' + e(g.type) + '</td>';
+    html += '<td style="padding:12px;color:#94a3b8">' + g.memberCount + '</td>';
+    html += '<td style="padding:12px"><span style="color:' + (g.isClusterWide ? '#f97316' : '#22c55e') + '">' + (g.isClusterWide ? 'Cluster' : 'Namespace') + '</span></td>';
+    html += '<td style="padding:12px"><span style="background:' + rColor + '22;color:' + rColor + ';padding:4px 8px;border-radius:4px;font-size:12px">' + g.riskLevel + '</span></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  document.getElementById('panel-groups').innerHTML = html;
+}
+
+function renderUsage() {
+  let html = '<div class="section-header"><div class="section-title">Identity Usage & Right-Sizing Analysis</div></div>';
+
+  const usage = data.usageAnalysis;
+  if (!usage || !usage.summary) {
+    html += '<div class="empty-state"><div class="empty-title">No usage data available</div>';
+    html += '<div style="color:#94a3b8;margin-top:8px">Usage analysis detects unused, orphaned, and over-provisioned identities.</div></div>';
+    document.getElementById('panel-usage').innerHTML = html;
+    return;
+  }
+
+  const healthScore = usage.summary.healthScore || 0;
+  const healthColor = healthScore >= 80 ? '#22c55e' : healthScore >= 60 ? '#eab308' : '#ef4444';
+  const circumference = 2 * Math.PI * 52;
+  const offset = circumference - (healthScore / 100) * circumference;
+
+  html += '<div style="display:grid;grid-template-columns:180px 1fr;gap:32px;margin-bottom:32px">';
+  html += '<div class="smooth-card" style="display:flex;align-items:center;justify-content:center">';
+  html += '<div class="progress-ring">';
+  html += '<svg width="120" height="120"><circle class="progress-ring-bg" cx="60" cy="60" r="52"/>';
+  html += '<circle class="progress-ring-fill" cx="60" cy="60" r="52" stroke="' + healthColor + '" stroke-dasharray="' + circumference + '" stroke-dashoffset="' + offset + '"/></svg>';
+  html += '<div class="progress-ring-text"><div class="progress-ring-value" style="color:' + healthColor + '">' + healthScore.toFixed(0) + '</div>';
+  html += '<div class="progress-ring-label">Health</div></div>';
+  html += '</div></div>';
+
+  html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px">';
+  html += '<div class="stat-card animate-in stagger-1"><div class="stat-value workloads">' + usage.summary.totalSAs + '</div><div class="stat-label">Total SAs</div></div>';
+  html += '<div class="stat-card animate-in stagger-2"><div class="stat-value critical">' + usage.summary.unusedSAs + '</div><div class="stat-label">Unused</div></div>';
+  html += '<div class="stat-card animate-in stagger-3"><div class="stat-value high">' + usage.summary.orphanedCount + '</div><div class="stat-label">Orphaned</div></div>';
+  html += '<div class="stat-card animate-in stagger-4"><div class="stat-value medium">' + usage.summary.overProvisionedCt + '</div><div class="stat-label">Over-Provisioned</div></div>';
+  html += '<div class="stat-card animate-in" style="animation-delay:0.5s"><div class="stat-value paths">' + usage.summary.staleCount + '</div><div class="stat-label">Stale</div></div>';
+  html += '</div></div>';
+
+  if (usage.recommendations?.length > 0) {
+    html += '<div class="smooth-card" style="margin-bottom:24px">';
+    html += '<div class="smooth-card-title"><div class="icon" style="background:rgba(88,166,255,0.15);color:#58a6ff">💡</div>Right-Sizing Recommendations</div>';
+    html += '<div style="display:grid;gap:12px">';
+    usage.recommendations.slice(0, 8).forEach((rec, idx) => {
+      html += '<div class="rec-card animate-in" style="animation-delay:' + (idx * 0.05) + 's">';
+      html += '<div class="rec-identity">' + e(rec.namespace) + '/' + e(rec.identity) + '</div>';
+      html += '<div class="rec-action">' + e(rec.action) + '</div>';
+      html += '<div class="rec-desc">' + e(rec.description) + '</div>';
+      html += '<span class="rec-impact ' + (rec.impact || 'medium').toLowerCase() + '">' + (rec.impact || 'medium') + ' impact</span>';
+      html += '</div>';
+    });
+    if (usage.recommendations.length > 8) {
+      html += '<div style="text-align:center;padding:12px;color:#64748b;font-size:13px;cursor:pointer" onclick="showAllRecommendations()">View ' + (usage.recommendations.length - 8) + ' more recommendations →</div>';
+    }
+    html += '</div></div>';
+  }
+
+  html += '<div class="grid-2col">';
+
+  if (usage.unusedSAs?.length > 0) {
+    html += '<div class="smooth-card">';
+    html += '<div class="smooth-card-title"><div class="icon" style="background:rgba(248,81,73,0.15);color:#f85149">⚠️</div>Unused Service Accounts</div>';
+    html += '<div style="display:grid;gap:10px">';
+    usage.unusedSAs.slice(0, 6).forEach((sa, idx) => {
+      html += '<div class="animate-in" style="background:rgba(15,23,42,0.5);padding:14px;border-radius:10px;border-left:3px solid #f85149;animation-delay:' + (idx * 0.05) + 's">';
+      html += '<div style="font-weight:600;color:#f1f5f9;font-size:13px">' + e(sa.namespace) + '/<span style="color:#f85149">' + e(sa.name) + '</span></div>';
+      html += '<div style="color:#94a3b8;font-size:11px;margin-top:4px">' + e(sa.reason) + '</div>';
+      html += '<div style="color:#64748b;font-size:10px;margin-top:2px">Age: ' + (sa.ageDays || 0) + ' days</div>';
+      html += '</div>';
+    });
+    if (usage.unusedSAs.length > 6) html += '<div style="text-align:center;color:#64748b;font-size:12px;padding:8px">+' + (usage.unusedSAs.length - 6) + ' more</div>';
+    html += '</div></div>';
+  }
+
+  if (usage.overProvisionedSAs?.length > 0) {
+    html += '<div class="smooth-card">';
+    html += '<div class="smooth-card-title"><div class="icon" style="background:rgba(234,179,8,0.15);color:#eab308">📊</div>Over-Provisioned Accounts</div>';
+    html += '<div style="display:grid;gap:10px">';
+    usage.overProvisionedSAs.slice(0, 6).forEach((op, idx) => {
+      const pct = op.overProvisionPct || 0;
+      html += '<div class="animate-in" style="background:rgba(15,23,42,0.5);padding:14px;border-radius:10px;animation-delay:' + (idx * 0.05) + 's">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+      html += '<span style="font-weight:600;color:#f1f5f9;font-size:13px">' + e(op.namespace) + '/' + e(op.name) + '</span>';
+      html += '<span style="color:#eab308;font-weight:700;font-size:14px">' + pct.toFixed(0) + '%%</span>';
+      html += '</div>';
+      html += '<div class="risk-meter"><div class="risk-meter-fill" style="width:' + pct + '%%;background:linear-gradient(90deg,#22c55e,' + (pct > 50 ? '#eab308' : '#22c55e') + ',' + (pct > 75 ? '#ef4444' : '#eab308') + ')"></div></div>';
+      html += '<div style="display:flex;justify-content:space-between;margin-top:8px;color:#94a3b8;font-size:11px">';
+      html += '<span>Granted: ' + (op.grantedPerms || 0) + '</span><span>Used: ' + (op.usedPerms || 0) + '</span></div>';
+      html += '</div>';
+    });
+    if (usage.overProvisionedSAs.length > 6) html += '<div style="text-align:center;color:#64748b;font-size:12px;padding:8px">+' + (usage.overProvisionedSAs.length - 6) + ' more</div>';
+    html += '</div></div>';
+  }
+
+  html += '</div>';
+
+  document.getElementById('panel-usage').innerHTML = html;
+}
+
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeModal();
@@ -2973,6 +4091,14 @@ try {
   renderCloud();
   console.log('Rendering unused...');
   renderUnused();
+  console.log('Rendering compliance...');
+  renderCompliance();
+  console.log('Rendering chains...');
+  renderChains();
+  console.log('Rendering groups...');
+  renderGroups();
+  console.log('Rendering usage...');
+  renderUsage();
   console.log('All renders complete!');
 } catch(e) {
   console.error('Render error:', e);

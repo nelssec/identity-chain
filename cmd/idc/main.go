@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/nelssec/identity-chain/pkg/analysis"
+	"github.com/nelssec/identity-chain/pkg/api"
 	"github.com/nelssec/identity-chain/pkg/audit"
 	"github.com/nelssec/identity-chain/pkg/checks"
 	"github.com/nelssec/identity-chain/pkg/collector"
@@ -100,6 +102,18 @@ Examples:
 	rootCmd.AddCommand(trendCmd())
 	rootCmd.AddCommand(clustersCmd())
 	rootCmd.AddCommand(watchCmd())
+	rootCmd.AddCommand(sarifCmd())
+	rootCmd.AddCommand(diffCmd())
+	rootCmd.AddCommand(snapshotCmd())
+	rootCmd.AddCommand(openshiftAuditCmd())
+	rootCmd.AddCommand(sccSimulateCmd())
+	rootCmd.AddCommand(identityRiskCmd())
+	rootCmd.AddCommand(complianceCmd())
+	rootCmd.AddCommand(chainCmd())
+	rootCmd.AddCommand(groupAnalysisCmd())
+	rootCmd.AddCommand(usageAnalysisCmd())
+	rootCmd.AddCommand(serveCmd())
+	rootCmd.AddCommand(smartScanCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -2733,4 +2747,2050 @@ Examples:
 	cmd.Flags().IntVar(&maxMemoryMB, "max-memory", 0, "Maximum memory limit in MB (0 = no limit)")
 
 	return cmd
+}
+
+func sarifCmd() *cobra.Command {
+	var outputFile string
+
+	cmd := &cobra.Command{
+		Use:   "sarif",
+		Short: "Export security findings in SARIF format",
+		Long: `Generate a SARIF (Static Analysis Results Interchange Format) report
+containing all security findings. SARIF is the standard format for
+security tools and integrates with GitHub Security tab.
+
+Examples:
+  idc sarif -A -f findings.sarif
+  idc sarif -A --include-cloud --aws-region us-west-2 -f findings.sarif`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.RBACAuditOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			rbacResult := analysis.RunRBACAudit(g, opts)
+
+			podSecOpts := analysis.PodSecurityOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				podSecOpts.Namespace = ""
+			}
+			podSecResult := analysis.RunPodSecurityAudit(g, podSecOpts)
+
+			netPolOpts := analysis.NetworkPolicyOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				netPolOpts.Namespace = ""
+			}
+			netPolResult := analysis.RunNetworkPolicyAudit(g, netPolOpts)
+
+			var cloudResult *analysis.CloudIAMAuditResult
+			if includeCloud {
+				cloudResult = analysis.AnalyzeCloudIAM(g)
+			}
+
+			var w *os.File
+			if outputFile != "" {
+				var err error
+				w, err = os.Create(outputFile)
+				if err != nil {
+					return fmt.Errorf("failed to create output file: %w", err)
+				}
+				defer w.Close()
+			} else {
+				w = os.Stdout
+			}
+
+			writer := output.NewSARIFWriter(w, "0.3.1")
+			return writer.WriteCombinedResults(rbacResult, podSecResult, netPolResult, cloudResult)
+		},
+	}
+
+	cmd.Flags().StringVarP(&outputFile, "output-file", "f", "", "Output file path (default: stdout)")
+
+	return cmd
+}
+
+func snapshotCmd() *cobra.Command {
+	var outputFile string
+
+	cmd := &cobra.Command{
+		Use:   "snapshot",
+		Short: "Create a snapshot of current security findings",
+		Long: `Create a JSON snapshot of all current security findings for later comparison.
+Use with 'idc diff' to compare snapshots over time.
+
+Examples:
+  idc snapshot -A -f baseline.json
+  idc snapshot -A --include-cloud --aws-region us-west-2 -f baseline.json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.RBACAuditOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+			rbacResult := analysis.RunRBACAudit(g, opts)
+
+			podSecOpts := analysis.PodSecurityOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				podSecOpts.Namespace = ""
+			}
+			podSecResult := analysis.RunPodSecurityAudit(g, podSecOpts)
+
+			netPolOpts := analysis.NetworkPolicyOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				netPolOpts.Namespace = ""
+			}
+			netPolResult := analysis.RunNetworkPolicyAudit(g, netPolOpts)
+
+			var cloudFindings []analysis.CloudIAMFinding
+			if includeCloud {
+				cloudResult := analysis.AnalyzeCloudIAM(g)
+				cloudFindings = cloudResult.Findings
+			}
+
+			snapshot := struct {
+				Timestamp       string                          `json:"timestamp"`
+				RBACFindings    []analysis.RBACFinding          `json:"rbac_findings"`
+				PodSecFindings  []analysis.PodSecurityFinding   `json:"pod_security_findings"`
+				NetPolFindings  []analysis.NetworkPolicyFinding `json:"network_policy_findings"`
+				CloudFindings   []analysis.CloudIAMFinding      `json:"cloud_findings"`
+			}{
+				Timestamp:      time.Now().UTC().Format(time.RFC3339),
+				RBACFindings:   rbacResult.Findings,
+				PodSecFindings: podSecResult.Findings,
+				NetPolFindings: netPolResult.Findings,
+				CloudFindings:  cloudFindings,
+			}
+
+			var w *os.File
+			if outputFile != "" {
+				var err error
+				w, err = os.Create(outputFile)
+				if err != nil {
+					return fmt.Errorf("failed to create output file: %w", err)
+				}
+				defer w.Close()
+			} else {
+				w = os.Stdout
+			}
+
+			encoder := json.NewEncoder(w)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(snapshot)
+		},
+	}
+
+	cmd.Flags().StringVarP(&outputFile, "output-file", "f", "", "Output file path (default: stdout)")
+
+	return cmd
+}
+
+func diffCmd() *cobra.Command {
+	var baselineFile string
+
+	cmd := &cobra.Command{
+		Use:   "diff",
+		Short: "Compare current findings against a baseline snapshot",
+		Long: `Compare the current security state against a previously saved baseline.
+Shows new findings, resolved findings, and overall trend.
+
+Examples:
+  idc diff -A --baseline baseline.json
+  idc diff -A --baseline before.json -o json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if baselineFile == "" {
+				return fmt.Errorf("--baseline is required")
+			}
+
+			baselineData, err := os.ReadFile(baselineFile)
+			if err != nil {
+				return fmt.Errorf("failed to read baseline file: %w", err)
+			}
+
+			var baseline struct {
+				RBACFindings   []analysis.RBACFinding          `json:"rbac_findings"`
+				PodSecFindings []analysis.PodSecurityFinding   `json:"pod_security_findings"`
+				NetPolFindings []analysis.NetworkPolicyFinding `json:"network_policy_findings"`
+				CloudFindings  []analysis.CloudIAMFinding      `json:"cloud_findings"`
+			}
+			if err := json.Unmarshal(baselineData, &baseline); err != nil {
+				return fmt.Errorf("failed to parse baseline: %w", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.RBACAuditOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+			rbacResult := analysis.RunRBACAudit(g, opts)
+
+			podSecOpts := analysis.PodSecurityOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				podSecOpts.Namespace = ""
+			}
+			podSecResult := analysis.RunPodSecurityAudit(g, podSecOpts)
+
+			netPolOpts := analysis.NetworkPolicyOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				netPolOpts.Namespace = ""
+			}
+			netPolResult := analysis.RunNetworkPolicyAudit(g, netPolOpts)
+
+			var cloudFindings []analysis.CloudIAMFinding
+			if includeCloud {
+				cloudResult := analysis.AnalyzeCloudIAM(g)
+				cloudFindings = cloudResult.Findings
+			}
+
+			baselineFindings := &analysis.ScanFindings{
+				RBACFindings:   baseline.RBACFindings,
+				PodSecFindings: baseline.PodSecFindings,
+				NetPolFindings: baseline.NetPolFindings,
+				CloudFindings:  baseline.CloudFindings,
+			}
+
+			currentFindings := &analysis.ScanFindings{
+				RBACFindings:   rbacResult.Findings,
+				PodSecFindings: podSecResult.Findings,
+				NetPolFindings: netPolResult.Findings,
+				CloudFindings:  cloudFindings,
+			}
+
+			result := analysis.ComputeDiff(baselineFindings, currentFindings)
+
+			if outputFormat == "json" {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(result)
+			}
+
+			fmt.Printf("Security Posture Comparison\n")
+			fmt.Printf("===========================\n\n")
+			fmt.Printf("Status: %s\n\n", strings.ToUpper(result.Summary.Status))
+			fmt.Printf("Baseline: %d findings\n", result.Summary.BaselineTotal)
+			fmt.Printf("Current:  %d findings\n\n", result.Summary.CurrentTotal)
+
+			if len(result.NewFindings) > 0 {
+				fmt.Printf("NEW FINDINGS (%d):\n", len(result.NewFindings))
+				fmt.Printf("-----------------\n")
+				for _, f := range result.NewFindings {
+					fmt.Printf("  [%s] %s - %s\n", f.Severity, f.CheckID, f.Title)
+					if f.Namespace != "" {
+						fmt.Printf("         Namespace: %s, Resource: %s\n", f.Namespace, f.Resource)
+					} else if f.Resource != "" {
+						fmt.Printf("         Resource: %s\n", f.Resource)
+					}
+				}
+				fmt.Println()
+			}
+
+			if len(result.ResolvedFindings) > 0 {
+				fmt.Printf("RESOLVED FINDINGS (%d):\n", len(result.ResolvedFindings))
+				fmt.Printf("----------------------\n")
+				for _, f := range result.ResolvedFindings {
+					fmt.Printf("  [%s] %s - %s\n", f.Severity, f.CheckID, f.Title)
+					if f.Namespace != "" {
+						fmt.Printf("         Namespace: %s, Resource: %s\n", f.Namespace, f.Resource)
+					} else if f.Resource != "" {
+						fmt.Printf("         Resource: %s\n", f.Resource)
+					}
+				}
+				fmt.Println()
+			}
+
+			fmt.Printf("Unchanged: %d findings\n", result.UnchangedCount)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&baselineFile, "baseline", "", "Baseline snapshot file to compare against (required)")
+
+	return cmd
+}
+
+func openshiftAuditCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "openshift-audit",
+		Short: "Comprehensive OpenShift security audit",
+		Long: `Run a comprehensive security audit specific to OpenShift clusters.
+Analyzes SCCs, Routes, OAuth clients, BuildConfigs, Projects, and OpenShift RBAC.
+
+This command only works on OpenShift clusters. On vanilla Kubernetes
+clusters, it will report that OpenShift is not detected.
+
+Examples:
+  idc openshift-audit -A
+  idc openshift-audit -A --include-system
+  idc openshift-audit -n myproject`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.OpenShiftAuditOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			result := analysis.RunOpenShiftAudit(g, opts)
+
+			if !result.IsOpenShift {
+				fmt.Println("OpenShift not detected. This command is for OpenShift clusters only.")
+				fmt.Println("Use 'idc rbac-audit' for standard Kubernetes RBAC analysis.")
+				return nil
+			}
+
+			if outputFormat == "json" {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(result)
+			}
+
+			fmt.Println("OpenShift Security Audit")
+			fmt.Println("========================")
+			fmt.Println()
+
+			fmt.Printf("Summary:\n")
+			fmt.Printf("  Total Findings:    %d\n", result.Summary.TotalFindings)
+			fmt.Printf("  Critical:          %d\n", result.Summary.CriticalFindings)
+			fmt.Printf("  High:              %d\n", result.Summary.HighFindings)
+			fmt.Printf("  Medium:            %d\n", result.Summary.MediumFindings)
+			fmt.Printf("  Low:               %d\n\n", result.Summary.LowFindings)
+
+			if result.SCCAnalysis != nil && len(result.SCCAnalysis.RiskyBindings) > 0 {
+				fmt.Printf("SCC Analysis:\n")
+				fmt.Printf("  Total SCCs:        %d\n", result.SCCAnalysis.Summary.TotalSCCs)
+				fmt.Printf("  Privileged SCCs:   %d\n", result.SCCAnalysis.Summary.PrivilegedSCCs)
+				fmt.Printf("  Risky Bindings:    %d\n", result.SCCAnalysis.Summary.RiskyBindings)
+				fmt.Printf("  Escalation Paths:  %d\n\n", result.SCCAnalysis.Summary.EscalationPaths)
+			}
+
+			printOpenShiftFindings("Route Findings", result.RouteFindings)
+			printOpenShiftFindings("OAuth Findings", result.OAuthFindings)
+			printOpenShiftFindings("Build Findings", result.BuildFindings)
+			printOpenShiftFindings("Project Findings", result.ProjectFindings)
+			printOpenShiftFindings("RBAC Findings", result.RBACFindings)
+
+			if result.SCCAnalysis != nil && len(result.SCCAnalysis.RiskyBindings) > 0 {
+				fmt.Printf("\nRisky SCC Bindings:\n")
+				fmt.Printf("-------------------\n")
+				for _, b := range result.SCCAnalysis.RiskyBindings {
+					fmt.Printf("  [%s] %s -> %s\n", strings.ToUpper(b.RiskLevel), b.SubjectName, b.SCCName)
+					if b.SubjectNS != "" {
+						fmt.Printf("         Namespace: %s\n", b.SubjectNS)
+					}
+					fmt.Printf("         Reason: %s\n", b.RiskReason)
+				}
+			}
+
+			if result.SCCAnalysis != nil && len(result.SCCAnalysis.EscalationPaths) > 0 {
+				fmt.Printf("\nSCC Escalation Paths:\n")
+				fmt.Printf("--------------------\n")
+				for _, p := range result.SCCAnalysis.EscalationPaths {
+					fmt.Printf("  [%s] %s -> %s (via %s)\n", strings.ToUpper(p.RiskLevel), p.Source, p.TargetSCC, p.Via)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
+}
+
+func printOpenShiftFindings(title string, findings []analysis.OpenShiftFinding) {
+	if len(findings) == 0 {
+		return
+	}
+
+	fmt.Printf("\n%s:\n", title)
+	fmt.Println(strings.Repeat("-", len(title)+1))
+
+	for _, f := range findings {
+		fmt.Printf("  [%s] %s: %s\n", strings.ToUpper(string(f.Severity)), f.CheckID, f.Title)
+		fmt.Printf("         %s\n", f.Description)
+		if len(f.Affected) > 0 && len(f.Affected) <= 5 {
+			for _, a := range f.Affected {
+				if a.Namespace != "" {
+					fmt.Printf("         - %s/%s\n", a.Namespace, a.Name)
+				} else {
+					fmt.Printf("         - %s\n", a.Name)
+				}
+			}
+		} else if len(f.Affected) > 5 {
+			for _, a := range f.Affected[:3] {
+				if a.Namespace != "" {
+					fmt.Printf("         - %s/%s\n", a.Namespace, a.Name)
+				} else {
+					fmt.Printf("         - %s\n", a.Name)
+				}
+			}
+			fmt.Printf("         ... and %d more\n", len(f.Affected)-3)
+		}
+	}
+}
+
+func sccSimulateCmd() *cobra.Command {
+	var workload string
+
+	cmd := &cobra.Command{
+		Use:   "scc-simulate",
+		Short: "Simulate which SCC a workload would use",
+		Long: `Determine which Security Context Constraint would be selected
+for a specific workload based on its service account and security context.
+
+This helps understand the effective security constraints for workloads.
+
+Examples:
+  idc scc-simulate --workload deployment/myapp -n myproject
+  idc scc-simulate --workload pod/mypod -n myproject`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if workload == "" {
+				return fmt.Errorf("--workload is required")
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			sccs := g.GetNodesByType(graph.NodeSCC)
+			if len(sccs) == 0 {
+				fmt.Println("No SCCs found. This command is for OpenShift clusters only.")
+				return nil
+			}
+
+			nodeID := resolveWorkloadNodeID(g, workload, namespace)
+			workloadNode := g.GetNode(nodeID)
+			if workloadNode == nil {
+				return fmt.Errorf("workload not found: %s", workload)
+			}
+
+			saEdges := g.GetOutEdges(workloadNode.ID)
+			var saNode *graph.Node
+			for _, edge := range saEdges {
+				if edge.Type == graph.EdgeUses {
+					saNode = g.GetNode(edge.To)
+					break
+				}
+			}
+
+			if saNode == nil {
+				fmt.Println("No ServiceAccount found for workload")
+				return nil
+			}
+
+			sccResult := analysis.AnalyzeSCCs(g)
+
+			saRef := "system:serviceaccount:" + saNode.Namespace + ":" + saNode.Name
+
+			fmt.Printf("Workload: %s/%s\n", workloadNode.Namespace, workloadNode.Name)
+			fmt.Printf("ServiceAccount: %s/%s\n\n", saNode.Namespace, saNode.Name)
+
+			var matchingBindings []analysis.SCCBinding
+			for _, binding := range sccResult.SCCBindings {
+				if binding.SubjectType == "ServiceAccount" &&
+					binding.SubjectNS == saNode.Namespace &&
+					binding.SubjectName == saNode.Name {
+					matchingBindings = append(matchingBindings, binding)
+				}
+				if binding.SubjectType == "User" && binding.SubjectName == saRef {
+					matchingBindings = append(matchingBindings, binding)
+				}
+				if binding.SubjectType == "Group" {
+					if binding.SubjectName == "system:serviceaccounts" ||
+						binding.SubjectName == "system:serviceaccounts:"+saNode.Namespace ||
+						binding.SubjectName == "system:authenticated" {
+						matchingBindings = append(matchingBindings, binding)
+					}
+				}
+			}
+
+			if len(matchingBindings) == 0 {
+				fmt.Println("No SCC bindings found for this ServiceAccount")
+				fmt.Println("The workload would use the 'restricted' SCC by default")
+				return nil
+			}
+
+			fmt.Println("Available SCCs for this ServiceAccount:")
+			fmt.Println("----------------------------------------")
+
+			type sccWithPriority struct {
+				name     string
+				priority int
+				access   []string
+			}
+
+			sccMap := make(map[string]*sccWithPriority)
+			for _, binding := range matchingBindings {
+				if _, exists := sccMap[binding.SCCName]; !exists {
+					sccDetail := sccResult.GetSCCByName(binding.SCCName)
+					if sccDetail != nil {
+						sccMap[binding.SCCName] = &sccWithPriority{
+							name:     binding.SCCName,
+							priority: sccDetail.Priority,
+							access:   sccDetail.AllowedFlags,
+						}
+					}
+				}
+			}
+
+			var sccList []*sccWithPriority
+			for _, scc := range sccMap {
+				sccList = append(sccList, scc)
+			}
+
+			for i := 0; i < len(sccList)-1; i++ {
+				for j := i + 1; j < len(sccList); j++ {
+					if sccList[j].priority > sccList[i].priority {
+						sccList[i], sccList[j] = sccList[j], sccList[i]
+					}
+				}
+			}
+
+			for i, scc := range sccList {
+				marker := "  "
+				if i == 0 {
+					marker = "* "
+				}
+				fmt.Printf("%s[Priority %d] %s\n", marker, scc.priority, scc.name)
+				if len(scc.access) > 0 {
+					fmt.Printf("    Allows: %s\n", strings.Join(scc.access, ", "))
+				}
+			}
+
+			if len(sccList) > 0 {
+				fmt.Printf("\n* = Selected SCC (highest priority)\n")
+
+				sccDetail := sccResult.GetSCCByName(sccList[0].name)
+				if sccDetail != nil && sccDetail.RiskLevel != "low" {
+					fmt.Printf("\nWARNING: Selected SCC '%s' has %s risk level\n", sccList[0].name, sccDetail.RiskLevel)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&workload, "workload", "", "Workload reference (e.g., deployment/myapp, pod/mypod)")
+
+	return cmd
+}
+
+func identityRiskCmd() *cobra.Command {
+	var minScore int
+	var topN int
+
+	cmd := &cobra.Command{
+		Use:   "identity-risk",
+		Short: "Calculate risk scores for all identities",
+		Long: `Calculate a comprehensive risk score for each service account based on:
+- Kubernetes RBAC permissions
+- Cloud IAM permissions (AWS/GCP/Azure)
+- OpenShift SCC access
+- Workload blast radius
+
+The risk score helps identify overprivileged identities that should be reviewed.
+
+Examples:
+  idc identity-risk -A
+  idc identity-risk -A --top 20
+  idc identity-risk -A --min-score 50
+  idc identity-risk -A --include-cloud --aws-region us-west-2`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.IdentityRiskOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+				MinScore:      minScore,
+				TopN:          topN,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			result := analysis.CalculateIdentityRisk(g, opts)
+
+			if outputFormat == "json" {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(result)
+			}
+
+			fmt.Println("Identity Risk Assessment")
+			fmt.Println("========================")
+			fmt.Println()
+
+			fmt.Printf("Summary:\n")
+			fmt.Printf("  Total Identities:     %d\n", result.Summary.TotalIdentities)
+			fmt.Printf("  Critical Risk:        %d\n", result.Summary.CriticalRiskCount)
+			fmt.Printf("  High Risk:            %d\n", result.Summary.HighRiskCount)
+			fmt.Printf("  Medium Risk:          %d\n", result.Summary.MediumRiskCount)
+			fmt.Printf("  Low Risk:             %d\n", result.Summary.LowRiskCount)
+			fmt.Printf("  With Cloud Access:    %d\n", result.Summary.WithCloudAccess)
+			fmt.Printf("  With Cluster-Admin:   %d\n", result.Summary.WithClusterAdmin)
+			fmt.Printf("  With Secrets Access:  %d\n", result.Summary.WithSecretsAccess)
+			fmt.Printf("  Overprivileged:       %d\n", result.Summary.OverprivilegedCount)
+			fmt.Printf("  Average Score:        %d\n\n", result.Summary.AverageScore)
+
+			if len(result.TopRisks) > 0 {
+				fmt.Printf("Top %d Risky Identities:\n", len(result.TopRisks))
+				fmt.Println(strings.Repeat("-", 80))
+				fmt.Printf("%-40s %-10s %-6s %s\n", "IDENTITY", "NAMESPACE", "SCORE", "RISK")
+				fmt.Println(strings.Repeat("-", 80))
+
+				for _, id := range result.TopRisks {
+					name := id.Name
+					if len(name) > 38 {
+						name = name[:35] + "..."
+					}
+					ns := id.Namespace
+					if len(ns) > 8 {
+						ns = ns[:8]
+					}
+					fmt.Printf("%-40s %-10s %-6d %s\n", name, ns, id.RiskScore, strings.ToUpper(id.RiskLevel))
+
+					if len(id.RiskFactors) > 0 {
+						factorCount := len(id.RiskFactors)
+						if factorCount > 3 {
+							factorCount = 3
+						}
+						for i := 0; i < factorCount; i++ {
+							f := id.RiskFactors[i]
+							fmt.Printf("  └─ [%s] %s (+%d)\n", strings.ToUpper(string(f.Severity)), f.Description, f.Score)
+						}
+						if len(id.RiskFactors) > 3 {
+							fmt.Printf("  └─ ... and %d more factors\n", len(id.RiskFactors)-3)
+						}
+					}
+				}
+			}
+
+			if len(result.Recommendations) > 0 {
+				fmt.Printf("\nRecommendations:\n")
+				fmt.Println(strings.Repeat("-", 40))
+				for i, rec := range result.Recommendations {
+					fmt.Printf("%d. %s\n", i+1, rec)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().IntVar(&minScore, "min-score", 0, "Only show identities with score >= this value")
+	cmd.Flags().IntVar(&topN, "top", 10, "Show top N risky identities")
+
+	return cmd
+}
+
+func complianceCmd() *cobra.Command {
+	var frameworks string
+
+	cmd := &cobra.Command{
+		Use:   "compliance",
+		Short: "Run compliance framework analysis",
+		Long: `Map security findings to compliance frameworks and calculate compliance scores.
+
+Supported frameworks:
+  - CIS Kubernetes Benchmark v1.8
+  - NSA/CISA Kubernetes Hardening Guide
+  - NIST 800-53 (Identity Controls)
+  - SOC2 (Identity Requirements)
+  - PCI-DSS (Service Account Controls)
+
+The analysis maps RBAC, pod security, and platform findings to specific controls
+in each framework and calculates per-section and overall compliance percentages.
+
+Examples:
+  idc compliance -A
+  idc compliance -A --frameworks CIS,NIST
+  idc compliance -A -o json > compliance-report.json
+  idc compliance -n prod --frameworks SOC2,PCIDSS`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.ComplianceOptions{
+				IncludeSystem: includeSystem,
+				Namespace:     namespace,
+				IncludeCloud:  includeCloud,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			if frameworks != "" {
+				fwList := strings.Split(frameworks, ",")
+				for _, fw := range fwList {
+					switch strings.ToUpper(strings.TrimSpace(fw)) {
+					case "CIS":
+						opts.Frameworks = append(opts.Frameworks, analysis.FrameworkCIS)
+					case "NSA", "NSA_CISA", "NSACISA":
+						opts.Frameworks = append(opts.Frameworks, analysis.FrameworkNSACISA)
+					case "NIST", "NIST800-53":
+						opts.Frameworks = append(opts.Frameworks, analysis.FrameworkNIST)
+					case "SOC2":
+						opts.Frameworks = append(opts.Frameworks, analysis.FrameworkSOC2)
+					case "PCIDSS", "PCI-DSS", "PCI":
+						opts.Frameworks = append(opts.Frameworks, analysis.FrameworkPCIDSS)
+					}
+				}
+			}
+
+			result := analysis.RunComplianceAnalysis(g, opts)
+
+			if outputFormat == "json" {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(result)
+			}
+
+			fmt.Println("Compliance Framework Analysis")
+			fmt.Println("==============================")
+			fmt.Println()
+
+			fmt.Printf("Overall Compliance Score: %.1f%%\n", result.OverallScore)
+			fmt.Printf("Total Findings Mapped: %d\n", result.Summary.TotalFindings)
+			fmt.Printf("Critical Gaps: %d\n", result.Summary.CriticalGapsCount)
+			fmt.Printf("High Gaps: %d\n\n", result.Summary.HighGapsCount)
+
+			for _, fc := range result.Frameworks {
+				fmt.Printf("%s (%s)\n", fc.Name, fc.Version)
+				fmt.Println(strings.Repeat("-", 60))
+				fmt.Printf("  Compliance: %.1f%% (%d/%d controls passed)\n",
+					fc.CompliancePercent, fc.PassedControls, fc.TotalControls)
+
+				if len(fc.SectionResults) > 0 {
+					fmt.Println("  Sections:")
+					for _, sec := range fc.SectionResults {
+						if sec.TotalControls > 0 {
+							status := "✓"
+							if sec.FailedControls > 0 {
+								status = "✗"
+							}
+							fmt.Printf("    %s %s: %.1f%% (%d/%d)\n",
+								status, sec.SectionTitle, sec.CompliancePercent,
+								sec.PassedControls, sec.TotalControls)
+						}
+					}
+				}
+
+				if len(fc.TopGaps) > 0 {
+					fmt.Println("  Top Gaps:")
+					for i, gap := range fc.TopGaps {
+						if i >= 5 {
+							break
+						}
+						fmt.Printf("    [%s] %s: %s\n",
+							strings.ToUpper(string(gap.Severity)),
+							gap.ControlID,
+							gap.ControlTitle)
+					}
+				}
+				fmt.Println()
+			}
+
+			if len(result.Recommendations) > 0 {
+				fmt.Println("Recommendations:")
+				for _, rec := range result.Recommendations {
+					fmt.Printf("  • %s\n", rec)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&frameworks, "frameworks", "", "Comma-separated list of frameworks (CIS,NSA_CISA,NIST,SOC2,PCIDSS)")
+
+	return cmd
+}
+
+func chainCmd() *cobra.Command {
+	var workload string
+	var format string
+
+	cmd := &cobra.Command{
+		Use:   "chain",
+		Short: "Trace identity chains from workloads to cloud resources",
+		Long: `Analyze the complete identity chain from workloads through service accounts,
+RBAC roles, and cloud IAM roles to cloud resources.
+
+This command provides full visibility into:
+- Pod → ServiceAccount → Role/ClusterRole chains
+- ServiceAccount → AWS IAM Role (IRSA/Pod Identity) chains
+- ServiceAccount → GCP Workload Identity chains
+- ServiceAccount → Azure Managed Identity chains
+- Cross-account role assumption chains
+- Trust relationships
+- Effective permissions calculation
+
+Output formats:
+- json (default): Full JSON output
+- dot: Graphviz DOT format for visualization
+- mermaid: Mermaid diagram format
+
+Examples:
+  idc chain -A
+  idc chain --workload deployment/api-server -n prod
+  idc chain -A --format dot > chain.dot
+  idc chain -A --format mermaid
+  idc chain -A -o json | jq '.high_risk_chains'`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.IdentityChainOptions{
+				Namespace:    namespace,
+				WorkloadRef:  workload,
+				IncludeCloud: includeCloud,
+				MaxDepth:     10,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			if format == "dot" || format == "mermaid" || format == "all" {
+				opts.OutputFormat = format
+			}
+
+			result := analysis.AnalyzeIdentityChains(g, opts)
+
+			if format == "dot" && result.DOTOutput != "" {
+				fmt.Print(result.DOTOutput)
+				return nil
+			}
+			if format == "mermaid" && result.MermaidOutput != "" {
+				fmt.Print(result.MermaidOutput)
+				return nil
+			}
+
+			if outputFormat == "json" {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(result)
+			}
+
+			fmt.Println("Identity Chain Analysis")
+			fmt.Println("=======================")
+			fmt.Println()
+
+			fmt.Printf("Summary:\n")
+			fmt.Printf("  Total Chains:          %d\n", result.Summary.TotalChains)
+			fmt.Printf("  With Cloud Access:     %d\n", result.Summary.ChainsWithCloudAccess)
+			fmt.Printf("  Cross-Account:         %d\n", result.Summary.CrossAccountChains)
+			fmt.Printf("  With Admin:            %d\n", result.Summary.ChainsWithAdmin)
+			fmt.Printf("  Avg Chain Depth:       %.1f\n", result.Summary.AverageChainDepth)
+			fmt.Printf("  Max Chain Depth:       %d\n", result.Summary.MaxChainDepth)
+			fmt.Println()
+
+			if len(result.Summary.ByCloudProvider) > 0 {
+				fmt.Println("By Cloud Provider:")
+				for provider, count := range result.Summary.ByCloudProvider {
+					fmt.Printf("  %-10s %d\n", provider, count)
+				}
+				fmt.Println()
+			}
+
+			fmt.Println("By Risk Level:")
+			for level, count := range result.Summary.ByRiskLevel {
+				fmt.Printf("  %-10s %d\n", strings.ToUpper(level), count)
+			}
+			fmt.Println()
+
+			if len(result.HighRiskChains) > 0 {
+				fmt.Printf("High Risk Chains (%d):\n", len(result.HighRiskChains))
+				fmt.Println(strings.Repeat("-", 80))
+				fmt.Printf("%-35s %-15s %-8s %-6s %s\n", "WORKLOAD", "NAMESPACE", "SCORE", "CLOUD", "CROSS-ACCT")
+				fmt.Println(strings.Repeat("-", 80))
+
+				for _, chain := range result.HighRiskChains {
+					name := chain.WorkloadName
+					if len(name) > 33 {
+						name = name[:30] + "..."
+					}
+					ns := chain.WorkloadNamespace
+					if len(ns) > 13 {
+						ns = ns[:13]
+					}
+					cloudAccess := "No"
+					if chain.HasCloudAccess {
+						cloudAccess = "Yes"
+					}
+					crossAccount := "No"
+					if chain.IsCrossAccount {
+						crossAccount = "Yes"
+					}
+					fmt.Printf("%-35s %-15s %-8d %-6s %s\n",
+						name, ns, chain.RiskScore, cloudAccess, crossAccount)
+				}
+				fmt.Println()
+			}
+
+			if len(result.Chains) > 0 && workload != "" {
+				chain := result.Chains[0]
+				fmt.Printf("\nChain Details for %s:\n", workload)
+				fmt.Println(strings.Repeat("-", 60))
+
+				if chain.ServiceAccount != nil {
+					fmt.Printf("  ServiceAccount: %s/%s\n", chain.ServiceAccount.Namespace, chain.ServiceAccount.Name)
+					if chain.ServiceAccount.CloudProvider != "" {
+						fmt.Printf("  Cloud Provider: %s\n", chain.ServiceAccount.CloudProvider)
+					}
+					if chain.ServiceAccount.CloudRoleARN != "" {
+						fmt.Printf("  AWS Role ARN:   %s\n", chain.ServiceAccount.CloudRoleARN)
+					}
+					if chain.ServiceAccount.GCPServiceAccount != "" {
+						fmt.Printf("  GCP SA:         %s\n", chain.ServiceAccount.GCPServiceAccount)
+					}
+				}
+
+				if len(chain.K8sRoles) > 0 {
+					fmt.Println("\n  K8s Roles:")
+					for _, role := range chain.K8sRoles {
+						roleType := "Role"
+						if role.IsClusterRole {
+							roleType = "ClusterRole"
+						}
+						fmt.Printf("    - %s: %s (via %s)\n", roleType, role.Name, role.ViaBinding)
+					}
+				}
+
+				if len(chain.CloudRoles) > 0 {
+					fmt.Println("\n  Cloud Roles:")
+					for _, role := range chain.CloudRoles {
+						adminStr := ""
+						if role.IsAdmin {
+							adminStr = " [ADMIN]"
+						}
+						fmt.Printf("    - %s: %s%s\n", role.Provider, role.RoleName, adminStr)
+					}
+				}
+
+				if chain.EffectivePermissions != nil {
+					fmt.Println("\n  Effective Permissions:")
+					if chain.EffectivePermissions.HasClusterAdmin {
+						fmt.Println("    [!] Has Cluster Admin")
+					}
+					if chain.EffectivePermissions.HasCloudAdmin {
+						fmt.Println("    [!] Has Cloud Admin")
+					}
+					if chain.EffectivePermissions.CanAccessSecrets {
+						fmt.Println("    [!] Can Access Secrets")
+					}
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&workload, "workload", "w", "", "Specific workload to trace (e.g., deployment/api-server)")
+	cmd.Flags().StringVar(&format, "format", "", "Output format: dot, mermaid, or all")
+
+	return cmd
+}
+
+func groupAnalysisCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "group-analysis",
+		Short: "Analyze group permissions and nested access",
+		Long: `Analyze RBAC group permissions, OIDC/LDAP group mappings, nested
+permission paths, and privilege escalation vectors through groups.
+
+This command identifies:
+- High-risk groups with cluster-admin or secrets access
+- OIDC group to K8s group mappings and their effective permissions
+- Privilege escalation paths through groups (escalate, bind, impersonate verbs)
+- Nested permission inheritance
+- Built-in system group bindings (system:authenticated, system:masters, etc.)
+
+Examples:
+  idc group-analysis -A
+  idc group-analysis -A -o json
+  idc group-analysis -A --include-system`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.GroupAnalysisOptions{
+				Namespace:     namespace,
+				IncludeSystem: includeSystem,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			result := analysis.AnalyzeGroups(g, opts)
+
+			if outputFormat == "json" {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(result)
+			}
+
+			fmt.Println("Group Permission Analysis")
+			fmt.Println("=========================")
+			fmt.Println()
+
+			fmt.Printf("Summary:\n")
+			fmt.Printf("  Total Groups:        %d\n", result.Summary.TotalGroups)
+			fmt.Printf("  High Risk Groups:    %d\n", result.Summary.HighRiskGroups)
+			fmt.Printf("  Groups with Admin:   %d\n", result.Summary.GroupsWithAdmin)
+			fmt.Printf("  Groups with Secrets: %d\n", result.Summary.GroupsWithSecrets)
+			fmt.Printf("  OIDC Mappings:       %d\n", result.Summary.OIDCMappings)
+			fmt.Printf("  Priv Esc Paths:      %d\n", result.Summary.PrivEscPaths)
+			fmt.Println()
+
+			if len(result.Summary.ByGroupType) > 0 {
+				fmt.Println("By Group Type:")
+				for gtype, count := range result.Summary.ByGroupType {
+					fmt.Printf("  %-10s %d\n", gtype, count)
+				}
+				fmt.Println()
+			}
+
+			if len(result.HighRiskGroups) > 0 {
+				fmt.Printf("High Risk Groups (%d):\n", len(result.HighRiskGroups))
+				fmt.Println(strings.Repeat("-", 80))
+				fmt.Printf("%-40s %-10s %-8s %-6s %s\n", "GROUP", "TYPE", "SCORE", "ADMIN", "SECRETS")
+				fmt.Println(strings.Repeat("-", 80))
+
+				for _, group := range result.HighRiskGroups {
+					name := group.Name
+					if len(name) > 38 {
+						name = name[:35] + "..."
+					}
+					admin := "No"
+					if group.HasClusterAdmin {
+						admin = "Yes"
+					}
+					secrets := "No"
+					if group.HasSecretsAccess {
+						secrets = "Yes"
+					}
+					fmt.Printf("%-40s %-10s %-8d %-6s %s\n",
+						name, group.Type, group.RiskScore, admin, secrets)
+				}
+				fmt.Println()
+			}
+
+			if len(result.PrivilegeEscalation) > 0 {
+				fmt.Printf("Privilege Escalation Paths (%d):\n", len(result.PrivilegeEscalation))
+				fmt.Println(strings.Repeat("-", 80))
+				for _, path := range result.PrivilegeEscalation {
+					fmt.Printf("  [%s] %s\n", strings.ToUpper(path.Severity), path.Group)
+					fmt.Printf("    Technique: %s\n", path.Technique)
+					fmt.Printf("    Path: %s\n", strings.Join(path.EscalationPath, " -> "))
+				}
+				fmt.Println()
+			}
+
+			if len(result.OIDCGroupMappings) > 0 {
+				fmt.Printf("OIDC Group Mappings (%d):\n", len(result.OIDCGroupMappings))
+				fmt.Println(strings.Repeat("-", 60))
+				for _, mapping := range result.OIDCGroupMappings {
+					fmt.Printf("  %s -> %s [%s]\n",
+						mapping.OIDCGroup, mapping.K8sGroup, mapping.RiskLevel)
+					if len(mapping.EffectiveRoles) > 0 {
+						fmt.Printf("    Roles: %s\n", strings.Join(mapping.EffectiveRoles, ", "))
+					}
+				}
+				fmt.Println()
+			}
+
+			if len(result.Recommendations) > 0 {
+				fmt.Println("Recommendations:")
+				for _, rec := range result.Recommendations {
+					fmt.Printf("  • %s\n", rec)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
+}
+
+func usageAnalysisCmd() *cobra.Command {
+	var staleDays int
+
+	cmd := &cobra.Command{
+		Use:   "usage-analysis",
+		Short: "Analyze identity usage and over-provisioning",
+		Long: `Detect unused service accounts, orphaned identities, over-provisioned
+accounts, and stale identities. Provides right-sizing recommendations.
+
+This command identifies:
+- Unused service accounts (no workloads attached)
+- Orphaned identities (have bindings but no active usage)
+- Over-provisioned accounts (more permissions than needed)
+- Stale identities (not used within threshold days)
+- Right-sizing recommendations to reduce attack surface
+
+Examples:
+  idc usage-analysis -A
+  idc usage-analysis -A --stale-days 60
+  idc usage-analysis -A -o json
+  idc usage-analysis -n prod --include-system`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			g, err := collectGraph(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to collect cluster data: %w", err)
+			}
+
+			opts := analysis.UsageAnalysisOptions{
+				Namespace:     namespace,
+				IncludeSystem: includeSystem,
+				StaleDays:     staleDays,
+			}
+			if allNamespaces {
+				opts.Namespace = ""
+			}
+
+			result := analysis.AnalyzeUsage(g, opts)
+
+			if outputFormat == "json" {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(result)
+			}
+
+			fmt.Println("Identity Usage Analysis")
+			fmt.Println("=======================")
+			fmt.Println()
+
+			fmt.Printf("Summary:\n")
+			fmt.Printf("  Total Service Accounts:  %d\n", result.Summary.TotalServiceAccounts)
+			fmt.Printf("  Unused:                  %d\n", result.Summary.UnusedCount)
+			fmt.Printf("  Orphaned:                %d\n", result.Summary.OrphanedCount)
+			fmt.Printf("  Over-Provisioned:        %d\n", result.Summary.OverProvisionedCount)
+			fmt.Printf("  High Risk Unused:        %d\n", result.Summary.HighRiskUnused)
+			fmt.Printf("  Right-Sizing Recs:       %d\n", result.Summary.TotalRightSizingRecs)
+			if result.Summary.AvgOverProvisionRate > 0 {
+				fmt.Printf("  Avg Over-Provision:      %.0f%%\n", result.Summary.AvgOverProvisionRate*100)
+			}
+			fmt.Println()
+
+			if len(result.UnusedServiceAccounts) > 0 {
+				fmt.Printf("Unused Service Accounts (%d):\n", len(result.UnusedServiceAccounts))
+				fmt.Println(strings.Repeat("-", 80))
+				fmt.Printf("%-35s %-15s %-10s %-10s %s\n", "NAME", "NAMESPACE", "BINDINGS", "CLOUD", "RISK")
+				fmt.Println(strings.Repeat("-", 80))
+
+				for _, sa := range result.UnusedServiceAccounts {
+					name := sa.Name
+					if len(name) > 33 {
+						name = name[:30] + "..."
+					}
+					ns := sa.Namespace
+					if len(ns) > 13 {
+						ns = ns[:13]
+					}
+					bindings := "No"
+					if sa.HasRoleBindings {
+						bindings = "Yes"
+					}
+					cloud := "No"
+					if sa.HasCloudRole {
+						cloud = "Yes"
+					}
+					fmt.Printf("%-35s %-15s %-10s %-10s %s\n",
+						name, ns, bindings, cloud, strings.ToUpper(sa.RiskLevel))
+				}
+				fmt.Println()
+			}
+
+			if len(result.OrphanedIdentities) > 0 {
+				fmt.Printf("Orphaned Identities (%d):\n", len(result.OrphanedIdentities))
+				fmt.Println(strings.Repeat("-", 80))
+				for _, orphan := range result.OrphanedIdentities {
+					fmt.Printf("  [%s] %s/%s (%s)\n",
+						strings.ToUpper(orphan.RiskLevel), orphan.Namespace, orphan.Name, orphan.Type)
+					fmt.Printf("    Reason: %s\n", orphan.OrphanReason)
+					if len(orphan.RoleBindings) > 0 {
+						fmt.Printf("    Bindings: %s\n", strings.Join(orphan.RoleBindings, ", "))
+					}
+				}
+				fmt.Println()
+			}
+
+			if len(result.OverProvisionedAccounts) > 0 {
+				fmt.Printf("Over-Provisioned Accounts (%d):\n", len(result.OverProvisionedAccounts))
+				fmt.Println(strings.Repeat("-", 80))
+				for _, ovp := range result.OverProvisionedAccounts {
+					fmt.Printf("  %s/%s - %.0f%% unused permissions\n",
+						ovp.Namespace, ovp.Name, ovp.OverProvisionRate*100)
+					fmt.Printf("    Granted: %d, Used: %d, Unused: %d\n",
+						ovp.GrantedPerms, ovp.UsedPerms, ovp.UnusedPerms)
+				}
+				fmt.Println()
+			}
+
+			if len(result.RightSizingRecommendations) > 0 {
+				fmt.Printf("Right-Sizing Recommendations (%d):\n", len(result.RightSizingRecommendations))
+				fmt.Println(strings.Repeat("-", 80))
+				for _, rec := range result.RightSizingRecommendations {
+					fmt.Printf("  [%s] %s/%s\n",
+						strings.ToUpper(rec.ImpactLevel), rec.Namespace, rec.Identity)
+					fmt.Printf("    %s\n", rec.Reason)
+				}
+				fmt.Println()
+			}
+
+			if len(result.Recommendations) > 0 {
+				fmt.Println("Recommendations:")
+				for _, rec := range result.Recommendations {
+					fmt.Printf("  • %s\n", rec)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().IntVar(&staleDays, "stale-days", 30, "Days of inactivity to consider identity stale")
+
+	return cmd
+}
+
+func serveCmd() *cobra.Command {
+	var port int
+	var host string
+	var enableCORS bool
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start the REST API server",
+		Long: `Start the IDC REST API server with Swagger documentation.
+
+The server provides REST endpoints for all IDC functionality:
+- Scanning and analysis
+- Blast radius calculations
+- Attack path detection
+- RBAC auditing
+- OpenShift security audits
+- Identity risk scoring
+- Smart auto-detection scans
+
+Swagger UI available at: http://<host>:<port>/swagger/
+
+Examples:
+  idc serve
+  idc serve --port 9090
+  idc serve --host 0.0.0.0 --port 8080 --cors`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := api.Config{
+				Kubeconfig:    kubeconfig,
+				Context:       kubecontext,
+				AWSRegion:     awsRegion,
+				GCPProject:    gcpProject,
+				AzureSubID:    azureSubID,
+				EnableSwagger: true,
+				EnableCORS:    enableCORS,
+			}
+			server := api.NewServer(cfg)
+
+			fmt.Printf("Starting IDC API server on %s:%d\n", host, port)
+			fmt.Printf("Swagger UI: http://%s:%d/swagger/\n", host, port)
+			fmt.Printf("API Health: http://%s:%d/health\n", host, port)
+
+			return server.ListenAndServe(host, port)
+		},
+	}
+
+	cmd.Flags().IntVar(&port, "port", 8080, "Port to listen on")
+	cmd.Flags().StringVar(&host, "host", "localhost", "Host to bind to")
+	cmd.Flags().BoolVar(&enableCORS, "cors", false, "Enable CORS for cross-origin requests")
+
+	return cmd
+}
+
+func smartScanCmd() *cobra.Command {
+	var outputFile string
+	var verbose bool
+
+	cmd := &cobra.Command{
+		Use:   "smart-scan",
+		Short: "Intelligent auto-detection scan",
+		Long: `Run an intelligent scan that automatically detects what to analyze.
+
+Smart scan automatically:
+- Detects if cluster is OpenShift and runs SCC/Route/OAuth analysis
+- Identifies cloud identity bindings (AWS/GCP/Azure) and enables IAM analysis
+- Discovers workloads with privileged configurations
+- Finds ServiceAccounts with overly permissive RBAC
+- Detects attack paths and privilege escalation vectors
+- Calculates identity risk scores
+
+This is the recommended way to deploy IDC - it follows the entire identity
+chain automatically without requiring manual configuration.
+
+Examples:
+  idc smart-scan
+  idc smart-scan -A
+  idc smart-scan -o json > report.json
+  idc smart-scan --verbose`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			result := runSmartScan(ctx, verbose)
+
+			if outputFormat == "json" {
+				data, err := json.MarshalIndent(result, "", "  ")
+				if err != nil {
+					return err
+				}
+				if outputFile != "" {
+					return os.WriteFile(outputFile, data, 0644)
+				}
+				fmt.Println(string(data))
+				return nil
+			}
+
+			printSmartScanResult(result)
+
+			if outputFile != "" {
+				data, _ := json.MarshalIndent(result, "", "  ")
+				return os.WriteFile(outputFile, data, 0644)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputFile, "output-file", "", "Write results to file")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "Show detailed progress")
+
+	return cmd
+}
+
+type SmartScanResult struct {
+	ClusterInfo       ClusterDetection                  `json:"cluster_info"`
+	PlatformInfo      *analysis.PlatformDetectionResult `json:"platform_info,omitempty"`
+	ExecutedScans     []string                          `json:"executed_scans"`
+	IdentityRisks     *analysis.IdentityRiskResult      `json:"identity_risks,omitempty"`
+	RBACFindings      []analysis.RBACFinding            `json:"rbac_findings,omitempty"`
+	ExploitablePerms  *analysis.ExploitablePermResult   `json:"exploitable_permissions,omitempty"`
+	AttackPaths       []*analysis.AttackPath            `json:"attack_paths,omitempty"`
+	OpenShiftAudit    *analysis.OpenShiftAuditResult    `json:"openshift_audit,omitempty"`
+	PodSecurityIssues []analysis.PodSecurityFinding     `json:"pod_security_issues,omitempty"`
+	CloudFindings     []analysis.CloudIAMFinding        `json:"cloud_findings,omitempty"`
+	PlatformChecks    *analysis.PlatformCheckResult     `json:"platform_checks,omitempty"`
+	Compliance        *analysis.ComplianceResult        `json:"compliance,omitempty"`
+	Summary           SmartScanSummary                  `json:"summary"`
+}
+
+type ClusterDetection struct {
+	IsOpenShift        bool     `json:"is_openshift"`
+	OpenShiftVersion   string   `json:"openshift_version,omitempty"`
+	HasAWSIdentities   bool     `json:"has_aws_identities"`
+	HasGCPIdentities   bool     `json:"has_gcp_identities"`
+	HasAzureIdentities bool     `json:"has_azure_identities"`
+	TotalNamespaces    int      `json:"total_namespaces"`
+	TotalWorkloads     int      `json:"total_workloads"`
+	TotalServiceAccounts int    `json:"total_service_accounts"`
+	DetectedFeatures   []string `json:"detected_features"`
+}
+
+type SmartScanSummary struct {
+	TotalFindings      int    `json:"total_findings"`
+	CriticalCount      int    `json:"critical_count"`
+	HighCount          int    `json:"high_count"`
+	MediumCount        int    `json:"medium_count"`
+	LowCount           int    `json:"low_count"`
+	RiskScore          int    `json:"risk_score"`
+	OverallRiskLevel   string `json:"overall_risk_level"`
+	TopRecommendations []string `json:"top_recommendations"`
+}
+
+func runSmartScan(ctx context.Context, verbose bool) *SmartScanResult {
+	result := &SmartScanResult{
+		ExecutedScans: []string{},
+	}
+
+	if verbose {
+		fmt.Println("[*] Starting smart scan - auto-detecting cluster configuration...")
+	}
+
+	g, err := collectGraph(ctx)
+	if err != nil {
+		if verbose {
+			fmt.Printf("[!] Failed to collect graph: %v\n", err)
+		}
+		return result
+	}
+
+	detection := detectClusterFeatures(g, verbose)
+	result.ClusterInfo = detection
+
+	if verbose {
+		fmt.Println("\n[*] Detecting platform and cloud identities...")
+	}
+	result.ExecutedScans = append(result.ExecutedScans, "platform-detection")
+	platformResult := analysis.DetectPlatform(g)
+	result.PlatformInfo = platformResult
+
+	if verbose {
+		fmt.Printf("  [+] Platform: %s\n", platformResult.Primary.Platform)
+		fmt.Printf("  [+] Cloud Provider: %s\n", platformResult.Primary.CloudProvider)
+		if platformResult.Primary.IsManaged {
+			fmt.Println("  [+] Managed Kubernetes service detected")
+		}
+		if platformResult.Primary.IsServerless {
+			fmt.Println("  [+] Serverless platform detected")
+		}
+	}
+
+	if verbose {
+		fmt.Println("\n[*] Analyzing exploitable permissions...")
+	}
+	result.ExecutedScans = append(result.ExecutedScans, "exploitable-permissions")
+	exploitResult := analysis.AnalyzeExploitablePermissions(g, platformResult)
+	result.ExploitablePerms = exploitResult
+
+	if verbose {
+		fmt.Printf("  [+] Found %d exploitable permissions (%d critical, %d high)\n",
+			len(exploitResult.Findings), exploitResult.CriticalCount, exploitResult.HighCount)
+	}
+
+	if verbose {
+		fmt.Println("\n[*] Running platform-specific security checks...")
+	}
+	result.ExecutedScans = append(result.ExecutedScans, "platform-checks")
+	platformChecks := analysis.RunPlatformChecks(g, platformResult)
+	result.PlatformChecks = platformChecks
+
+	if verbose {
+		fmt.Printf("  [+] %d/%d checks passed\n", platformChecks.PassedChecks, platformChecks.TotalChecks)
+	}
+
+	if verbose {
+		fmt.Println("\n[*] Running identity risk analysis...")
+	}
+	result.ExecutedScans = append(result.ExecutedScans, "identity-risk")
+	riskResult := analysis.CalculateIdentityRisk(g, analysis.IdentityRiskOptions{
+		TopN: 20,
+	})
+	result.IdentityRisks = riskResult
+
+	if verbose {
+		fmt.Println("[*] Running RBAC audit...")
+	}
+	result.ExecutedScans = append(result.ExecutedScans, "rbac-audit")
+	rbacResult := analysis.RunRBACAudit(g, analysis.RBACAuditOptions{
+		IncludeSystem: includeSystem,
+	})
+	result.RBACFindings = rbacResult.Findings
+
+	if verbose {
+		fmt.Println("[*] Detecting attack paths...")
+	}
+	result.ExecutedScans = append(result.ExecutedScans, "attack-paths")
+	attackOpts := analysis.AttackPathOptions{
+		IncludeCloud:   detection.HasAWSIdentities || detection.HasGCPIdentities || detection.HasAzureIdentities,
+		IncludePrivesc: true,
+	}
+	attackResults, _ := analysis.FindAllAttackPaths(g, attackOpts)
+	var attackPaths []*analysis.AttackPath
+	for _, ar := range attackResults {
+		attackPaths = append(attackPaths, ar.Paths...)
+	}
+	if len(attackPaths) > 20 {
+		attackPaths = attackPaths[:20]
+	}
+	result.AttackPaths = attackPaths
+
+	if verbose {
+		fmt.Println("[*] Checking pod security...")
+	}
+	result.ExecutedScans = append(result.ExecutedScans, "pod-security")
+	podSecResult := analysis.RunPodSecurityAudit(g, analysis.PodSecurityOptions{
+		IncludeSystem: includeSystem,
+	})
+	result.PodSecurityIssues = podSecResult.Findings
+
+	if detection.IsOpenShift {
+		if verbose {
+			fmt.Println("[*] OpenShift detected - running OpenShift security audit...")
+		}
+		result.ExecutedScans = append(result.ExecutedScans, "openshift-audit")
+		osResult := analysis.RunOpenShiftAudit(g, analysis.OpenShiftAuditOptions{
+			IncludeSystem: includeSystem,
+		})
+		result.OpenShiftAudit = osResult
+	}
+
+	if detection.HasAWSIdentities || detection.HasGCPIdentities || detection.HasAzureIdentities {
+		if verbose {
+			fmt.Println("[*] Cloud identities detected - running cloud IAM audit...")
+		}
+		result.ExecutedScans = append(result.ExecutedScans, "cloud-audit")
+		cloudResult := analysis.AnalyzeCloudIAM(g)
+		result.CloudFindings = cloudResult.Findings
+	}
+
+	if verbose {
+		fmt.Println("[*] Running compliance framework analysis...")
+	}
+	result.ExecutedScans = append(result.ExecutedScans, "compliance")
+	complianceResult := analysis.RunComplianceAnalysis(g, analysis.ComplianceOptions{
+		IncludeSystem: includeSystem,
+		IncludeCloud:  detection.HasAWSIdentities || detection.HasGCPIdentities || detection.HasAzureIdentities,
+	})
+	result.Compliance = complianceResult
+
+	if verbose {
+		fmt.Printf("  [+] Overall compliance: %.1f%%\n", complianceResult.Summary.AverageCompliance)
+	}
+
+	result.Summary = calculateSmartScanSummary(result)
+
+	if verbose {
+		fmt.Printf("\n[+] Smart scan complete - executed %d scan types\n", len(result.ExecutedScans))
+	}
+
+	return result
+}
+
+func detectClusterFeatures(g *graph.Graph, verbose bool) ClusterDetection {
+	detection := ClusterDetection{
+		DetectedFeatures: []string{},
+	}
+
+	for _, node := range g.GetNodesByType(graph.NodeSCC) {
+		detection.IsOpenShift = true
+		_ = node
+		break
+	}
+
+	if detection.IsOpenShift {
+		detection.DetectedFeatures = append(detection.DetectedFeatures, "OpenShift SCCs")
+		if verbose {
+			fmt.Println("  [+] Detected OpenShift cluster")
+		}
+	}
+
+	routes := g.GetNodesByType(graph.NodeRoute)
+	if len(routes) > 0 {
+		detection.DetectedFeatures = append(detection.DetectedFeatures, "OpenShift Routes")
+	}
+
+	oauthClients := g.GetNodesByType(graph.NodeOAuthClient)
+	if len(oauthClients) > 0 {
+		detection.DetectedFeatures = append(detection.DetectedFeatures, "OpenShift OAuth")
+	}
+
+	for _, node := range g.GetNodesByType(graph.NodeCloudRole) {
+		if node.Metadata.CloudProvider == "aws" {
+			detection.HasAWSIdentities = true
+		} else if node.Metadata.CloudProvider == "gcp" {
+			detection.HasGCPIdentities = true
+		} else if node.Metadata.CloudProvider == "azure" {
+			detection.HasAzureIdentities = true
+		}
+	}
+
+	if detection.HasAWSIdentities {
+		detection.DetectedFeatures = append(detection.DetectedFeatures, "AWS IAM Roles")
+		if verbose {
+			fmt.Println("  [+] Detected AWS IAM roles for service accounts")
+		}
+	}
+	if detection.HasGCPIdentities {
+		detection.DetectedFeatures = append(detection.DetectedFeatures, "GCP Workload Identity")
+		if verbose {
+			fmt.Println("  [+] Detected GCP Workload Identity bindings")
+		}
+	}
+	if detection.HasAzureIdentities {
+		detection.DetectedFeatures = append(detection.DetectedFeatures, "Azure Managed Identity")
+		if verbose {
+			fmt.Println("  [+] Detected Azure managed identity bindings")
+		}
+	}
+
+	namespaces := make(map[string]bool)
+	for _, node := range g.GetNodesByType(graph.NodeWorkload) {
+		namespaces[node.Namespace] = true
+	}
+	detection.TotalNamespaces = len(namespaces)
+	detection.TotalWorkloads = len(g.GetNodesByType(graph.NodeWorkload))
+	detection.TotalServiceAccounts = len(g.GetNodesByType(graph.NodeServiceAccount))
+
+	if verbose {
+		fmt.Printf("  [+] Found %d namespaces, %d workloads, %d service accounts\n",
+			detection.TotalNamespaces, detection.TotalWorkloads, detection.TotalServiceAccounts)
+	}
+
+	return detection
+}
+
+func calculateSmartScanSummary(result *SmartScanResult) SmartScanSummary {
+	summary := SmartScanSummary{
+		TopRecommendations: []string{},
+	}
+
+	for _, f := range result.RBACFindings {
+		summary.TotalFindings++
+		switch f.Severity {
+		case graph.SeverityCritical:
+			summary.CriticalCount++
+		case graph.SeverityHigh:
+			summary.HighCount++
+		case graph.SeverityMedium:
+			summary.MediumCount++
+		case graph.SeverityLow:
+			summary.LowCount++
+		}
+	}
+
+	for _, f := range result.PodSecurityIssues {
+		summary.TotalFindings++
+		switch f.Severity {
+		case graph.SeverityCritical:
+			summary.CriticalCount++
+		case graph.SeverityHigh:
+			summary.HighCount++
+		case graph.SeverityMedium:
+			summary.MediumCount++
+		case graph.SeverityLow:
+			summary.LowCount++
+		}
+	}
+
+	if result.OpenShiftAudit != nil {
+		allFindings := append(result.OpenShiftAudit.RouteFindings, result.OpenShiftAudit.OAuthFindings...)
+		allFindings = append(allFindings, result.OpenShiftAudit.BuildFindings...)
+		allFindings = append(allFindings, result.OpenShiftAudit.ProjectFindings...)
+		allFindings = append(allFindings, result.OpenShiftAudit.RBACFindings...)
+		for _, f := range allFindings {
+			summary.TotalFindings++
+			switch f.Severity {
+			case graph.SeverityCritical:
+				summary.CriticalCount++
+			case graph.SeverityHigh:
+				summary.HighCount++
+			case graph.SeverityMedium:
+				summary.MediumCount++
+			case graph.SeverityLow:
+				summary.LowCount++
+			}
+		}
+	}
+
+	for _, f := range result.CloudFindings {
+		summary.TotalFindings++
+		switch f.Severity {
+		case graph.SeverityCritical:
+			summary.CriticalCount++
+		case graph.SeverityHigh:
+			summary.HighCount++
+		case graph.SeverityMedium:
+			summary.MediumCount++
+		case graph.SeverityLow:
+			summary.LowCount++
+		}
+	}
+
+	if result.ExploitablePerms != nil {
+		for _, f := range result.ExploitablePerms.Findings {
+			summary.TotalFindings++
+			switch f.Severity {
+			case graph.SeverityCritical:
+				summary.CriticalCount++
+			case graph.SeverityHigh:
+				summary.HighCount++
+			case graph.SeverityMedium:
+				summary.MediumCount++
+			case graph.SeverityLow:
+				summary.LowCount++
+			}
+		}
+	}
+
+	if result.PlatformChecks != nil {
+		for _, f := range result.PlatformChecks.Findings {
+			if !f.Passed {
+				summary.TotalFindings++
+				switch f.Severity {
+				case graph.SeverityCritical:
+					summary.CriticalCount++
+				case graph.SeverityHigh:
+					summary.HighCount++
+				case graph.SeverityMedium:
+					summary.MediumCount++
+				case graph.SeverityLow:
+					summary.LowCount++
+				}
+			}
+		}
+	}
+
+	summary.TotalFindings += len(result.AttackPaths)
+	for _, path := range result.AttackPaths {
+		switch path.MaxSeverity {
+		case graph.SeverityCritical:
+			summary.CriticalCount++
+		case graph.SeverityHigh:
+			summary.HighCount++
+		case graph.SeverityMedium:
+			summary.MediumCount++
+		case graph.SeverityLow:
+			summary.LowCount++
+		}
+	}
+
+	summary.RiskScore = summary.CriticalCount*40 + summary.HighCount*20 + summary.MediumCount*10 + summary.LowCount*5
+
+	if summary.CriticalCount > 0 || summary.RiskScore > 200 {
+		summary.OverallRiskLevel = "CRITICAL"
+	} else if summary.HighCount > 3 || summary.RiskScore > 100 {
+		summary.OverallRiskLevel = "HIGH"
+	} else if summary.MediumCount > 5 || summary.RiskScore > 50 {
+		summary.OverallRiskLevel = "MEDIUM"
+	} else {
+		summary.OverallRiskLevel = "LOW"
+	}
+
+	if summary.CriticalCount > 0 {
+		summary.TopRecommendations = append(summary.TopRecommendations,
+			"Address critical findings immediately - these represent severe security risks")
+	}
+	if result.IdentityRisks != nil && len(result.IdentityRisks.TopRisks) > 0 {
+		topRisk := result.IdentityRisks.TopRisks[0]
+		if topRisk.RiskScore > 70 {
+			summary.TopRecommendations = append(summary.TopRecommendations,
+				fmt.Sprintf("Review high-risk identity: %s/%s (score: %d)", topRisk.Namespace, topRisk.Name, topRisk.RiskScore))
+		}
+	}
+	if len(result.AttackPaths) > 0 {
+		summary.TopRecommendations = append(summary.TopRecommendations,
+			fmt.Sprintf("Investigate %d detected attack paths that could lead to privilege escalation", len(result.AttackPaths)))
+	}
+	if result.ClusterInfo.IsOpenShift && result.OpenShiftAudit != nil && result.OpenShiftAudit.SCCAnalysis != nil {
+		sccIssues := len(result.OpenShiftAudit.SCCAnalysis.RiskyBindings)
+		if sccIssues > 0 {
+			summary.TopRecommendations = append(summary.TopRecommendations,
+				fmt.Sprintf("Review %d Security Context Constraints issues in OpenShift", sccIssues))
+		}
+	}
+
+	if result.ExploitablePerms != nil && result.ExploitablePerms.CriticalCount > 0 {
+		summary.TopRecommendations = append(summary.TopRecommendations,
+			fmt.Sprintf("Found %d critical exploitable permissions that could enable cluster compromise",
+				result.ExploitablePerms.CriticalCount))
+	}
+
+	if result.PlatformChecks != nil && result.PlatformChecks.FailedChecks > 0 {
+		summary.TopRecommendations = append(summary.TopRecommendations,
+			fmt.Sprintf("Address %d failed platform security checks for %s",
+				result.PlatformChecks.FailedChecks, result.PlatformChecks.Platform))
+	}
+
+	if result.PlatformInfo != nil {
+		if result.PlatformInfo.CloudIdentities.HasAWSIRSA || result.PlatformInfo.CloudIdentities.HasAWSPodIdentity {
+			if len(result.PlatformInfo.CloudIdentities.AWSRoleARNs) > 0 {
+				summary.TopRecommendations = append(summary.TopRecommendations,
+					fmt.Sprintf("Review %d AWS IAM roles mapped to Kubernetes service accounts",
+						len(result.PlatformInfo.CloudIdentities.AWSRoleARNs)))
+			}
+		}
+		if result.PlatformInfo.CloudIdentities.HasGCPWorkloadID {
+			if len(result.PlatformInfo.CloudIdentities.GCPServiceAccounts) > 0 {
+				summary.TopRecommendations = append(summary.TopRecommendations,
+					fmt.Sprintf("Review %d GCP service accounts using Workload Identity",
+						len(result.PlatformInfo.CloudIdentities.GCPServiceAccounts)))
+			}
+		}
+		if result.PlatformInfo.CloudIdentities.HasAzureWorkloadID || result.PlatformInfo.CloudIdentities.HasAzurePodIdentity {
+			if len(result.PlatformInfo.CloudIdentities.AzureClientIDs) > 0 {
+				summary.TopRecommendations = append(summary.TopRecommendations,
+					fmt.Sprintf("Review %d Azure managed identities bound to Kubernetes",
+						len(result.PlatformInfo.CloudIdentities.AzureClientIDs)))
+			}
+		}
+	}
+
+	if result.Compliance != nil {
+		if result.Compliance.Summary.CriticalGapsCount > 0 {
+			summary.TopRecommendations = append(summary.TopRecommendations,
+				fmt.Sprintf("Address %d critical compliance gaps across frameworks",
+					result.Compliance.Summary.CriticalGapsCount))
+		}
+		if result.Compliance.Summary.AverageCompliance < 70 {
+			summary.TopRecommendations = append(summary.TopRecommendations,
+				fmt.Sprintf("Overall compliance score is %.1f%% - review framework requirements",
+					result.Compliance.Summary.AverageCompliance))
+		}
+	}
+
+	return summary
+}
+
+func printSmartScanResult(result *SmartScanResult) {
+	fmt.Println()
+	fmt.Println("===============================================================")
+	fmt.Println("                    IDC SMART SCAN REPORT                       ")
+	fmt.Println("===============================================================")
+
+	fmt.Println("\nCLUSTER DETECTION")
+	fmt.Println(strings.Repeat("-", 50))
+	fmt.Printf("  Namespaces:        %d\n", result.ClusterInfo.TotalNamespaces)
+	fmt.Printf("  Workloads:         %d\n", result.ClusterInfo.TotalWorkloads)
+	fmt.Printf("  Service Accounts:  %d\n", result.ClusterInfo.TotalServiceAccounts)
+
+	if result.PlatformInfo != nil {
+		fmt.Printf("  Platform:          %s\n", result.PlatformInfo.Primary.Platform)
+		fmt.Printf("  Cloud Provider:    %s\n", result.PlatformInfo.Primary.CloudProvider)
+		if result.PlatformInfo.Primary.IsManaged {
+			fmt.Println("  Managed:           Yes")
+		}
+		if result.PlatformInfo.Primary.IsServerless {
+			fmt.Println("  Serverless:        Yes")
+		}
+		if len(result.PlatformInfo.Primary.Features) > 0 {
+			fmt.Printf("  Features:          %s\n", strings.Join(result.PlatformInfo.Primary.Features, ", "))
+		}
+	} else if result.ClusterInfo.IsOpenShift {
+		fmt.Printf("  Platform:          OpenShift")
+		if result.ClusterInfo.OpenShiftVersion != "" {
+			fmt.Printf(" %s", result.ClusterInfo.OpenShiftVersion)
+		}
+		fmt.Println()
+	} else {
+		fmt.Println("  Platform:          Kubernetes")
+	}
+
+	if len(result.ClusterInfo.DetectedFeatures) > 0 {
+		fmt.Printf("  Detected Features: %s\n", strings.Join(result.ClusterInfo.DetectedFeatures, ", "))
+	}
+
+	if result.PlatformInfo != nil {
+		fmt.Println("\nCLOUD IDENTITIES")
+		fmt.Println(strings.Repeat("-", 50))
+		ci := result.PlatformInfo.CloudIdentities
+		if ci.HasAWSIRSA {
+			fmt.Printf("  AWS IRSA:          %d role(s)\n", len(ci.AWSRoleARNs))
+		}
+		if ci.HasAWSPodIdentity {
+			fmt.Println("  AWS Pod Identity:  Enabled")
+		}
+		if ci.HasGCPWorkloadID {
+			fmt.Printf("  GCP Workload ID:   %d SA(s)\n", len(ci.GCPServiceAccounts))
+		}
+		if ci.HasAzureWorkloadID {
+			fmt.Printf("  Azure Workload ID: %d identity(s)\n", len(ci.AzureClientIDs))
+		}
+		if ci.HasAzurePodIdentity {
+			fmt.Println("  Azure Pod ID:      Enabled")
+		}
+		if !ci.HasAWSIRSA && !ci.HasAWSPodIdentity && !ci.HasGCPWorkloadID && !ci.HasAzureWorkloadID && !ci.HasAzurePodIdentity {
+			fmt.Println("  No cloud identities detected")
+		}
+	}
+
+	if result.Compliance != nil {
+		fmt.Println("\nCOMPLIANCE ANALYSIS")
+		fmt.Println(strings.Repeat("-", 50))
+		fmt.Printf("  Overall Score:     %.1f%%\n", result.Compliance.OverallScore)
+		fmt.Printf("  Critical Gaps:     %d\n", result.Compliance.Summary.CriticalGapsCount)
+		fmt.Printf("  High Gaps:         %d\n", result.Compliance.Summary.HighGapsCount)
+		fmt.Println()
+		for _, fc := range result.Compliance.Frameworks {
+			status := "✓"
+			if fc.CompliancePercent < 70 {
+				status = "✗"
+			} else if fc.CompliancePercent < 90 {
+				status = "○"
+			}
+			fmt.Printf("  %s %-15s %.1f%% (%d/%d)\n",
+				status, fc.Framework, fc.CompliancePercent, fc.PassedControls, fc.TotalControls)
+		}
+	}
+
+	fmt.Println("\nEXECUTED SCANS")
+	fmt.Println(strings.Repeat("-", 50))
+	for _, scan := range result.ExecutedScans {
+		fmt.Printf("  [+] %s\n", scan)
+	}
+
+	fmt.Println("\nSUMMARY")
+	fmt.Println(strings.Repeat("-", 50))
+	fmt.Printf("  Total Findings:    %d\n", result.Summary.TotalFindings)
+	fmt.Printf("  Risk Score:        %d\n", result.Summary.RiskScore)
+	fmt.Printf("  Overall Risk:      %s\n", result.Summary.OverallRiskLevel)
+	fmt.Println()
+	fmt.Printf("  Critical:          %d\n", result.Summary.CriticalCount)
+	fmt.Printf("  High:              %d\n", result.Summary.HighCount)
+	fmt.Printf("  Medium:            %d\n", result.Summary.MediumCount)
+	fmt.Printf("  Low:               %d\n", result.Summary.LowCount)
+
+	if result.IdentityRisks != nil && len(result.IdentityRisks.TopRisks) > 0 {
+		fmt.Println("\nTOP RISKY IDENTITIES")
+		fmt.Println(strings.Repeat("-", 50))
+		count := len(result.IdentityRisks.TopRisks)
+		if count > 5 {
+			count = 5
+		}
+		for i := 0; i < count; i++ {
+			id := result.IdentityRisks.TopRisks[i]
+			fmt.Printf("  %d. %s/%s (score: %d, %s)\n", i+1, id.Namespace, id.Name, id.RiskScore, id.RiskLevel)
+		}
+	}
+
+	if len(result.AttackPaths) > 0 {
+		fmt.Println("\nTOP ATTACK PATHS")
+		fmt.Println(strings.Repeat("-", 50))
+		count := len(result.AttackPaths)
+		if count > 5 {
+			count = 5
+		}
+		for i := 0; i < count; i++ {
+			path := result.AttackPaths[i]
+			source := "unknown"
+			if path.EntryPoint != nil {
+				source = path.EntryPoint.Name
+			}
+			fmt.Printf("  %d. %s -> %s [%s]\n", i+1, source, path.Objective, strings.ToUpper(string(path.MaxSeverity)))
+			fmt.Printf("     %s\n", path.Description)
+		}
+	}
+
+	if result.ExploitablePerms != nil && len(result.ExploitablePerms.Findings) > 0 {
+		fmt.Println("\nEXPLOITABLE PERMISSIONS")
+		fmt.Println(strings.Repeat("-", 50))
+		fmt.Printf("  Critical:          %d\n", result.ExploitablePerms.CriticalCount)
+		fmt.Printf("  High:              %d\n", result.ExploitablePerms.HighCount)
+		fmt.Printf("  Medium:            %d\n", result.ExploitablePerms.MediumCount)
+		fmt.Printf("  Low:               %d\n", result.ExploitablePerms.LowCount)
+		fmt.Println()
+		count := len(result.ExploitablePerms.Findings)
+		if count > 5 {
+			count = 5
+		}
+		for i := 0; i < count; i++ {
+			f := result.ExploitablePerms.Findings[i]
+			fmt.Printf("  %d. [%s] %s\n", i+1, strings.ToUpper(string(f.Severity)), f.Title)
+			fmt.Printf("     Subject: %s/%s (%s)\n", f.Subject.Namespace, f.Subject.Name, f.Subject.Kind)
+			fmt.Printf("     Category: %s\n", f.Category)
+		}
+	}
+
+	if result.PlatformChecks != nil && result.PlatformChecks.FailedChecks > 0 {
+		fmt.Println("\nPLATFORM SECURITY CHECKS")
+		fmt.Println(strings.Repeat("-", 50))
+		fmt.Printf("  Platform:          %s\n", result.PlatformChecks.Platform)
+		fmt.Printf("  Passed:            %d/%d\n", result.PlatformChecks.PassedChecks, result.PlatformChecks.TotalChecks)
+		fmt.Printf("  Failed:            %d\n", result.PlatformChecks.FailedChecks)
+		fmt.Println()
+		count := 0
+		for _, f := range result.PlatformChecks.Findings {
+			if !f.Passed {
+				count++
+				if count > 5 {
+					break
+				}
+				fmt.Printf("  %d. [%s] %s\n", count, strings.ToUpper(string(f.Severity)), f.Title)
+				fmt.Printf("     %s\n", f.Description)
+			}
+		}
+	}
+
+	if len(result.Summary.TopRecommendations) > 0 {
+		fmt.Println("\nTOP RECOMMENDATIONS")
+		fmt.Println(strings.Repeat("-", 50))
+		for i, rec := range result.Summary.TopRecommendations {
+			fmt.Printf("  %d. %s\n", i+1, rec)
+		}
+	}
+
+	fmt.Println()
 }
