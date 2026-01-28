@@ -3675,23 +3675,23 @@ function renderCompliance() {
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(450px,1fr));gap:20px">';
   comp.frameworks.forEach(fw => {
     const scoreColor = fw.score >= 80 ? '#22c55e' : fw.score >= 60 ? '#eab308' : '#ef4444';
-    html += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:16px;padding:20px">';
+    html += '<div class="smooth-card" style="cursor:pointer;transition:all 0.3s ease" onclick="showComplianceDetails(\'' + e(fw.name).replace(/'/g, "\\'") + '\')">';
     html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
     html += '<div style="font-size:18px;font-weight:700;color:#f1f5f9">' + e(fw.name) + '</div>';
     html += '<div style="font-size:24px;font-weight:700;color:' + scoreColor + '">' + fw.score.toFixed(1) + '%%</div>';
     html += '</div>';
     html += '<div class="risk-meter"><div class="risk-meter-fill" style="width:' + fw.score + '%%;background:' + scoreColor + '"></div></div>';
     html += '<div style="display:flex;gap:12px;margin-top:12px;color:#94a3b8;font-size:13px">';
-    html += '<span>' + fw.passedControls + ' passed</span>';
-    html += '<span>' + fw.failedControls + ' failed</span>';
+    html += '<span style="color:#22c55e">✓ ' + fw.passedControls + ' passed</span>';
+    html += '<span style="color:#ef4444">✗ ' + fw.failedControls + ' failed</span>';
     html += '<span>' + fw.totalControls + ' total</span>';
     html += '</div>';
     if (fw.gaps?.length > 0) {
       html += '<div style="margin-top:16px;border-top:1px solid rgba(51,65,85,0.5);padding-top:16px">';
-      html += '<div style="font-size:14px;font-weight:600;color:#f1f5f9;margin-bottom:12px">Gaps (' + fw.gaps.length + ')</div>';
-      fw.gaps.slice(0, 5).forEach(gap => {
+      html += '<div style="font-size:14px;font-weight:600;color:#f1f5f9;margin-bottom:12px">Top Gaps (' + fw.gaps.length + ')</div>';
+      fw.gaps.slice(0, 3).forEach(gap => {
         const sColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308'}[gap.severity] || '#94a3b8';
-        html += '<div style="padding:10px;background:rgba(15,23,42,0.5);border-radius:8px;margin-bottom:8px">';
+        html += '<div style="padding:10px;background:rgba(15,23,42,0.5);border-radius:8px;margin-bottom:8px;border-left:3px solid ' + sColor + '">';
         html += '<div style="display:flex;align-items:center;gap:8px">';
         html += '<span style="background:' + sColor + '22;color:' + sColor + ';padding:2px 6px;border-radius:4px;font-size:11px">' + gap.severity + '</span>';
         html += '<span style="color:#f1f5f9;font-weight:500;font-size:13px">' + e(gap.controlId) + '</span>';
@@ -3699,7 +3699,7 @@ function renderCompliance() {
         html += '<div style="color:#94a3b8;font-size:12px;margin-top:4px">' + e(gap.title) + '</div>';
         html += '</div>';
       });
-      if (fw.gaps.length > 5) html += '<div style="color:#64748b;font-size:12px;text-align:center">... and ' + (fw.gaps.length - 5) + ' more</div>';
+      if (fw.gaps.length > 3) html += '<div style="color:#58a6ff;font-size:12px;text-align:center;cursor:pointer">Click to view all ' + fw.gaps.length + ' gaps →</div>';
       html += '</div>';
     }
     html += '</div>';
@@ -4028,26 +4028,34 @@ function renderUsage() {
 
   if (usage.unusedSAs?.length > 0) {
     html += '<div class="smooth-card">';
-    html += '<div class="smooth-card-title"><div class="icon" style="background:rgba(248,81,73,0.15);color:#f85149">⚠️</div>Unused Service Accounts</div>';
+    html += '<div class="smooth-card-title" style="cursor:pointer" onclick="showUnusedDetails()">';
+    html += '<div class="icon" style="background:rgba(248,81,73,0.15);color:#f85149">⚠️</div>';
+    html += '<span>Unused Service Accounts</span>';
+    html += '<span style="margin-left:auto;font-size:12px;color:#58a6ff;font-weight:500">View All →</span>';
+    html += '</div>';
     html += '<div style="display:grid;gap:10px">';
     usage.unusedSAs.slice(0, 6).forEach((sa, idx) => {
-      html += '<div class="animate-in" style="background:rgba(15,23,42,0.5);padding:14px;border-radius:10px;border-left:3px solid #f85149;animation-delay:' + (idx * 0.05) + 's">';
+      html += '<div class="animate-in" style="background:rgba(15,23,42,0.5);padding:14px;border-radius:10px;border-left:3px solid #f85149;animation-delay:' + (idx * 0.05) + 's;cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'translateX(4px)\'" onmouseout="this.style.transform=\'translateX(0)\'">';
       html += '<div style="font-weight:600;color:#f1f5f9;font-size:13px">' + e(sa.namespace) + '/<span style="color:#f85149">' + e(sa.name) + '</span></div>';
       html += '<div style="color:#94a3b8;font-size:11px;margin-top:4px">' + e(sa.reason) + '</div>';
       html += '<div style="color:#64748b;font-size:10px;margin-top:2px">Age: ' + (sa.ageDays || 0) + ' days</div>';
       html += '</div>';
     });
-    if (usage.unusedSAs.length > 6) html += '<div style="text-align:center;color:#64748b;font-size:12px;padding:8px">+' + (usage.unusedSAs.length - 6) + ' more</div>';
+    if (usage.unusedSAs.length > 6) html += '<div style="text-align:center;color:#58a6ff;font-size:12px;padding:8px;cursor:pointer" onclick="showUnusedDetails()">View all ' + usage.unusedSAs.length + ' unused accounts →</div>';
     html += '</div></div>';
   }
 
   if (usage.overProvisionedSAs?.length > 0) {
     html += '<div class="smooth-card">';
-    html += '<div class="smooth-card-title"><div class="icon" style="background:rgba(234,179,8,0.15);color:#eab308">📊</div>Over-Provisioned Accounts</div>';
+    html += '<div class="smooth-card-title" style="cursor:pointer" onclick="showOverProvisionedDetails()">';
+    html += '<div class="icon" style="background:rgba(234,179,8,0.15);color:#eab308">📊</div>';
+    html += '<span>Over-Provisioned Accounts</span>';
+    html += '<span style="margin-left:auto;font-size:12px;color:#58a6ff;font-weight:500">View All →</span>';
+    html += '</div>';
     html += '<div style="display:grid;gap:10px">';
     usage.overProvisionedSAs.slice(0, 6).forEach((op, idx) => {
       const pct = op.overProvisionPct || 0;
-      html += '<div class="animate-in" style="background:rgba(15,23,42,0.5);padding:14px;border-radius:10px;animation-delay:' + (idx * 0.05) + 's">';
+      html += '<div class="animate-in" style="background:rgba(15,23,42,0.5);padding:14px;border-radius:10px;animation-delay:' + (idx * 0.05) + 's;cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'translateX(4px)\'" onmouseout="this.style.transform=\'translateX(0)\'">';
       html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
       html += '<span style="font-weight:600;color:#f1f5f9;font-size:13px">' + e(op.namespace) + '/' + e(op.name) + '</span>';
       html += '<span style="color:#eab308;font-weight:700;font-size:14px">' + pct.toFixed(0) + '%%</span>';
@@ -4057,13 +4065,180 @@ function renderUsage() {
       html += '<span>Granted: ' + (op.grantedPerms || 0) + '</span><span>Used: ' + (op.usedPerms || 0) + '</span></div>';
       html += '</div>';
     });
-    if (usage.overProvisionedSAs.length > 6) html += '<div style="text-align:center;color:#64748b;font-size:12px;padding:8px">+' + (usage.overProvisionedSAs.length - 6) + ' more</div>';
+    if (usage.overProvisionedSAs.length > 6) html += '<div style="text-align:center;color:#58a6ff;font-size:12px;padding:8px;cursor:pointer" onclick="showOverProvisionedDetails()">View all ' + usage.overProvisionedSAs.length + ' over-provisioned accounts →</div>';
     html += '</div></div>';
   }
 
   html += '</div>';
 
   document.getElementById('panel-usage').innerHTML = html;
+}
+
+// Show all chains in a modal
+function showAllChains() {
+  const chains = data.identityChains?.chains || [];
+  let content = '<div style="max-height:70vh;overflow-y:auto">';
+  chains.forEach((chain, idx) => {
+    const riskColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308','low':'#22c55e'}[chain.riskLevel] || '#94a3b8';
+    content += '<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.5);border-radius:12px;padding:16px;margin-bottom:12px">';
+    content += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+    content += '<strong style="color:#f1f5f9">' + e(chain.workloadNs) + '/' + e(chain.workloadName) + '</strong>';
+    content += '<span style="background:' + riskColor + '22;color:' + riskColor + ';padding:2px 8px;border-radius:4px;font-size:11px">' + (chain.riskLevel || 'unknown') + '</span>';
+    content += '</div>';
+    content += '<div style="color:#94a3b8;font-size:12px">SA: ' + e(chain.serviceAccount || 'default') + '</div>';
+    if (chain.steps?.length > 0) {
+      content += '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">';
+      chain.steps.forEach((step, i) => {
+        const typeColor = {'workload':'#58a6ff','serviceaccount':'#a371f7','role':'#39d4ff','iamrole':'#22c55e','resource':'#f0883e'}[step.type.toLowerCase()] || '#94a3b8';
+        content += '<span style="background:' + typeColor + '22;color:' + typeColor + ';padding:4px 8px;border-radius:4px;font-size:11px">' + step.type + ': ' + e(step.name) + '</span>';
+        if (i < chain.steps.length - 1) content += '<span style="color:#64748b">→</span>';
+      });
+      content += '</div>';
+    }
+    if (chain.cloudResources?.length > 0) {
+      content += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(51,65,85,0.5)">';
+      content += '<div style="color:#64748b;font-size:10px;margin-bottom:4px">CLOUD RESOURCES</div>';
+      chain.cloudResources.forEach(res => {
+        content += '<span style="background:rgba(34,197,94,0.12);color:#3fb950;padding:3px 6px;border-radius:4px;font-size:10px;margin-right:4px;font-family:monospace">' + e(res) + '</span>';
+      });
+      content += '</div>';
+    }
+    content += '</div>';
+  });
+  content += '</div>';
+  openModal('All Identity Chains (' + chains.length + ')', content);
+}
+
+// Show all recommendations in a modal
+function showAllRecommendations() {
+  const recs = data.usageAnalysis?.recommendations || [];
+  let content = '<div style="max-height:70vh;overflow-y:auto">';
+  recs.forEach((rec, idx) => {
+    const impactColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308','low':'#22c55e'}[rec.impact?.toLowerCase()] || '#94a3b8';
+    content += '<div class="rec-card" style="margin-bottom:12px">';
+    content += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+    content += '<strong style="color:#f1f5f9">' + e(rec.namespace) + '/' + e(rec.identity) + '</strong>';
+    content += '<span class="rec-impact ' + (rec.impact || 'medium').toLowerCase() + '">' + (rec.impact || 'medium') + '</span>';
+    content += '</div>';
+    content += '<div style="color:#58a6ff;font-size:13px;font-weight:500">' + e(rec.action) + '</div>';
+    content += '<div style="color:#94a3b8;font-size:12px;margin-top:4px">' + e(rec.description) + '</div>';
+    content += '</div>';
+  });
+  content += '</div>';
+  openModal('All Recommendations (' + recs.length + ')', content);
+}
+
+// Show all groups in a modal
+function showAllGroups() {
+  const groups = data.groupAnalysis?.groups || [];
+  let content = '<div style="max-height:70vh;overflow-y:auto">';
+  content += '<table style="width:100%%;border-collapse:collapse">';
+  content += '<thead><tr style="border-bottom:1px solid rgba(51,65,85,0.5)">';
+  content += '<th style="text-align:left;padding:10px;color:#94a3b8;font-size:12px">GROUP</th>';
+  content += '<th style="text-align:left;padding:10px;color:#94a3b8;font-size:12px">TYPE</th>';
+  content += '<th style="text-align:left;padding:10px;color:#94a3b8;font-size:12px">MEMBERS</th>';
+  content += '<th style="text-align:left;padding:10px;color:#94a3b8;font-size:12px">SCOPE</th>';
+  content += '<th style="text-align:left;padding:10px;color:#94a3b8;font-size:12px">RISK</th>';
+  content += '</tr></thead><tbody>';
+  groups.forEach(g => {
+    const rColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308','low':'#22c55e'}[g.riskLevel] || '#94a3b8';
+    content += '<tr style="border-bottom:1px solid rgba(51,65,85,0.3)">';
+    content += '<td style="padding:10px;color:#f1f5f9;font-weight:500">' + e(g.name) + '</td>';
+    content += '<td style="padding:10px;color:#94a3b8">' + e(g.type) + '</td>';
+    content += '<td style="padding:10px;color:#94a3b8">' + g.memberCount + '</td>';
+    content += '<td style="padding:10px"><span style="color:' + (g.isClusterWide ? '#f97316' : '#22c55e') + '">' + (g.isClusterWide ? 'Cluster' : 'Namespace') + '</span></td>';
+    content += '<td style="padding:10px"><span style="background:' + rColor + '22;color:' + rColor + ';padding:3px 8px;border-radius:4px;font-size:11px">' + g.riskLevel + '</span></td>';
+    content += '</tr>';
+  });
+  content += '</tbody></table></div>';
+  openModal('All Groups (' + groups.length + ')', content);
+}
+
+// Show compliance details in modal
+function showComplianceDetails(frameworkName) {
+  const fw = data.compliance?.frameworks?.find(f => f.name === frameworkName);
+  if (!fw) return;
+  let content = '<div style="max-height:70vh;overflow-y:auto">';
+  content += '<div style="display:flex;gap:20px;margin-bottom:20px">';
+  content += '<div style="flex:1;background:rgba(30,41,59,0.6);padding:16px;border-radius:12px;text-align:center">';
+  content += '<div style="font-size:32px;font-weight:700;color:' + (fw.score >= 80 ? '#22c55e' : fw.score >= 60 ? '#eab308' : '#ef4444') + '">' + fw.score.toFixed(1) + '%%</div>';
+  content += '<div style="color:#94a3b8;font-size:12px">Compliance Score</div></div>';
+  content += '<div style="flex:1;background:rgba(30,41,59,0.6);padding:16px;border-radius:12px;text-align:center">';
+  content += '<div style="font-size:32px;font-weight:700;color:#22c55e">' + fw.passedControls + '</div>';
+  content += '<div style="color:#94a3b8;font-size:12px">Passed Controls</div></div>';
+  content += '<div style="flex:1;background:rgba(30,41,59,0.6);padding:16px;border-radius:12px;text-align:center">';
+  content += '<div style="font-size:32px;font-weight:700;color:#ef4444">' + fw.failedControls + '</div>';
+  content += '<div style="color:#94a3b8;font-size:12px">Failed Controls</div></div>';
+  content += '</div>';
+  if (fw.gaps?.length > 0) {
+    content += '<div style="font-size:14px;font-weight:600;color:#f1f5f9;margin-bottom:12px">Compliance Gaps</div>';
+    fw.gaps.forEach(gap => {
+      const sColor = {'critical':'#ef4444','high':'#f97316','medium':'#eab308'}[gap.severity] || '#94a3b8';
+      content += '<div style="background:rgba(15,23,42,0.5);padding:12px;border-radius:8px;margin-bottom:8px;border-left:3px solid ' + sColor + '">';
+      content += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
+      content += '<span style="background:' + sColor + '22;color:' + sColor + ';padding:2px 6px;border-radius:4px;font-size:10px">' + gap.severity + '</span>';
+      content += '<span style="color:#f1f5f9;font-weight:600;font-size:13px">' + e(gap.controlId) + '</span>';
+      content += '</div>';
+      content += '<div style="color:#f1f5f9;font-size:13px">' + e(gap.title) + '</div>';
+      if (gap.description) content += '<div style="color:#94a3b8;font-size:12px;margin-top:4px">' + e(gap.description) + '</div>';
+      if (gap.remediation) content += '<div style="color:#58a6ff;font-size:12px;margin-top:4px">Remediation: ' + e(gap.remediation) + '</div>';
+      content += '</div>';
+    });
+  }
+  content += '</div>';
+  openModal(fw.name, content);
+}
+
+// Show unused SA details
+function showUnusedDetails() {
+  const unused = data.usageAnalysis?.unusedSAs || [];
+  let content = '<div style="max-height:70vh;overflow-y:auto">';
+  unused.forEach(sa => {
+    content += '<div style="background:rgba(15,23,42,0.5);padding:14px;border-radius:10px;margin-bottom:10px;border-left:3px solid #f85149">';
+    content += '<div style="font-weight:600;color:#f1f5f9">' + e(sa.namespace) + '/' + e(sa.name) + '</div>';
+    content += '<div style="color:#94a3b8;font-size:12px;margin-top:4px">' + e(sa.reason) + '</div>';
+    content += '<div style="color:#64748b;font-size:11px;margin-top:2px">Created ' + (sa.ageDays || 0) + ' days ago</div>';
+    content += '</div>';
+  });
+  content += '</div>';
+  openModal('Unused Service Accounts (' + unused.length + ')', content);
+}
+
+// Show over-provisioned details
+function showOverProvisionedDetails() {
+  const overprov = data.usageAnalysis?.overProvisionedSAs || [];
+  let content = '<div style="max-height:70vh;overflow-y:auto">';
+  overprov.forEach(op => {
+    const pct = op.overProvisionPct || 0;
+    content += '<div style="background:rgba(15,23,42,0.5);padding:14px;border-radius:10px;margin-bottom:10px">';
+    content += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+    content += '<span style="font-weight:600;color:#f1f5f9">' + e(op.namespace) + '/' + e(op.name) + '</span>';
+    content += '<span style="color:#eab308;font-weight:700">' + pct.toFixed(0) + '%% over-provisioned</span>';
+    content += '</div>';
+    content += '<div class="risk-meter"><div class="risk-meter-fill" style="width:' + pct + '%%;background:#eab308"></div></div>';
+    content += '<div style="display:flex;justify-content:space-between;margin-top:8px;color:#94a3b8;font-size:12px">';
+    content += '<span>Granted: ' + (op.grantedPerms || 0) + ' permissions</span>';
+    content += '<span>Used: ' + (op.usedPerms || 0) + ' permissions</span>';
+    content += '</div>';
+    content += '</div>';
+  });
+  content += '</div>';
+  openModal('Over-Provisioned Accounts (' + overprov.length + ')', content);
+}
+
+// Navigate to related panel from overview
+function navigateToFinding(type, idx) {
+  switch(type) {
+    case 'blast': showPanel('blast'); break;
+    case 'rbac': showPanel('rbac'); break;
+    case 'podsec': showPanel('podsec'); break;
+    case 'cloud': showPanel('cloud'); break;
+    case 'compliance': showPanel('compliance'); break;
+    case 'chains': showPanel('chains'); break;
+    case 'groups': showPanel('groups'); break;
+    case 'usage': showPanel('usage'); break;
+    default: showPanel('overview');
+  }
 }
 
 // Keyboard shortcuts
