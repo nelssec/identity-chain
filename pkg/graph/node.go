@@ -51,6 +51,7 @@ type NodeMetadata struct {
 	AzureManagedID     string              `json:"azure_managed_id,omitempty"`
 	AutomountToken     bool                `json:"automount_token,omitempty"`
 	IsClusterRole      bool                `json:"is_cluster_role,omitempty"`
+	IsAggregated       bool                `json:"is_aggregated,omitempty"`
 	Rules              []Rule              `json:"rules,omitempty"`
 	ResourceKind       string              `json:"resource_kind,omitempty"`
 	Verbs              []string            `json:"verbs,omitempty"`
@@ -67,6 +68,11 @@ type NodeMetadata struct {
 	OAuthClientInfo    *OAuthClientInfo    `json:"oauth_client_info,omitempty"`
 	BuildConfigInfo    *BuildConfigInfo    `json:"build_config_info,omitempty"`
 	ProjectInfo        *ProjectInfo        `json:"project_info,omitempty"`
+	// Phase 3: projected volume token metadata
+	TokenAudience            string `json:"token_audience,omitempty"`
+	TokenExpirationSeconds   int64  `json:"token_expiration_seconds,omitempty"`
+	// Phase 3: EKS Pod Identity webhook annotation
+	EKSPodIdentityAssociation string `json:"eks_pod_identity_association,omitempty"`
 }
 
 type SCCInfo struct {

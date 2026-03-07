@@ -475,7 +475,14 @@ func findMultiHopPaths(g *graph.Graph, sa *graph.Node, roles []*graph.Node, maxD
 	}
 
 	// Check for secrets access -> steal other SA tokens
-	if canReadAllSecrets(g, roles) {
+	if secretsSev, canReadSecrets := canReadSecretsWithSeverity(g, roles); canReadSecrets {
+		isClusterScoped := hasClusterRole(roles) && secretsSev == graph.SeverityCritical
+		desc := "Can read SA tokens from secrets to assume any identity"
+		privilege := "Any service account in accessible namespaces"
+		if !isClusterScoped {
+			desc = "Can read SA tokens from secrets within the namespace"
+			privilege = "Any service account in the same namespace"
+		}
 		path := PrivescPath{
 			ServiceAccount: sa,
 			Steps: []PrivescStep{
@@ -484,13 +491,13 @@ func findMultiHopPaths(g *graph.Graph, sa *graph.Node, roles []*graph.Node, maxD
 					Vector:      VectorReadSecrets,
 					FromNode:    sa,
 					Description: "Read service account tokens from secrets",
-					Severity:    graph.SeverityCritical,
+					Severity:    secretsSev,
 				},
 			},
-			FinalPrivilege: "Any service account in accessible namespaces",
-			Severity:       graph.SeverityCritical,
-			Description:    "Can read SA tokens from secrets to assume any identity",
-			AffectsCluster: hasClusterRole(roles),
+			FinalPrivilege: privilege,
+			Severity:       secretsSev,
+			Description:    desc,
+			AffectsCluster: isClusterScoped,
 			Mitigations: []string{
 				"Use bound service account tokens instead of secret-based tokens",
 				"Restrict secrets access to specific secrets",
@@ -627,11 +634,19 @@ func canImpersonate(g *graph.Graph, roles []*graph.Node) bool {
 }
 
 func canReadAllSecrets(g *graph.Graph, roles []*graph.Node) bool {
+	_, found := canReadSecretsWithSeverity(g, roles)
+	return found
+}
+
+// canReadSecretsWithSeverity returns the effective severity and whether any role
+// grants secrets read access. Cluster-scoped secrets access is Critical; namespace-
+// scoped is High (attacker can still steal SA tokens in their namespace).
+func canReadSecretsWithSeverity(g *graph.Graph, roles []*graph.Node) (graph.Severity, bool) {
+	// Track the highest severity found across all roles.
+	highestSeverity := graph.SeverityLow
+	found := false
+
 	for _, role := range roles {
-		// Only critical if cluster-scoped
-		if !role.Metadata.IsClusterRole {
-			continue
-		}
 		for _, e := range g.GetOutEdges(role.ID) {
 			if e.Type != graph.EdgeGrants {
 				continue
@@ -644,11 +659,19 @@ func canReadAllSecrets(g *graph.Graph, roles []*graph.Node) bool {
 				(containsString(e.Metadata.Verbs, "get") ||
 					containsString(e.Metadata.Verbs, "list") ||
 					containsString(e.Metadata.Verbs, "*")) {
-				return true
+				found = true
+				sev := graph.SeverityHigh // namespace-scoped: attacker can steal tokens in their NS
+				if role.Metadata.IsClusterRole {
+					sev = graph.SeverityCritical // cluster-scoped: can steal any SA token
+				}
+				if severityValue[sev] > severityValue[highestSeverity] {
+					highestSeverity = sev
+				}
 			}
 		}
 	}
-	return false
+
+	return highestSeverity, found
 }
 
 func canAccessNodeProxy(g *graph.Graph, roles []*graph.Node) bool {

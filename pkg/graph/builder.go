@@ -38,6 +38,11 @@ func (b *Builder) AddServiceAccount(sa *corev1.ServiceAccount) error {
 		if azureID, ok := sa.Annotations["azure.workload.identity/client-id"]; ok {
 			node.Metadata.AzureManagedID = azureID
 		}
+		// Phase 3: EKS Pod Identity webhook annotation.
+		// The annotation value is the IAM role ARN for the association.
+		if podIdentityAssoc, ok := sa.Annotations["pods.eks.amazonaws.com/service-account-token-audience"]; ok {
+			node.Metadata.EKSPodIdentityAssociation = podIdentityAssoc
+		}
 	}
 
 	if sa.AutomountServiceAccountToken != nil {
@@ -46,7 +51,28 @@ func (b *Builder) AddServiceAccount(sa *corev1.ServiceAccount) error {
 		node.Metadata.AutomountToken = true
 	}
 
-	return b.graph.AddNode(node)
+	if err := b.graph.AddNode(node); err != nil {
+		return err
+	}
+
+	// Phase 3: create EdgeAssumes for EKS Pod Identity associations.
+	if node.Metadata.EKSPodIdentityAssociation != "" {
+		assoc := node.Metadata.EKSPodIdentityAssociation
+		cloudRoleID := GenerateNodeID(NodeCloudRole, "", assoc)
+		if b.graph.GetNode(cloudRoleID) == nil {
+			cloudRoleNode := NewNode(NodeCloudRole, "", assoc)
+			cloudRoleNode.Metadata.CloudProvider = "aws"
+			_ = b.graph.AddNode(cloudRoleNode)
+		}
+		edge := NewEdge(EdgeAssumes, node.ID, cloudRoleID)
+		edge.Metadata.CloudProvider = "aws"
+		edge.Metadata.RoleARN = assoc
+		if err := b.graph.AddEdge(edge); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (b *Builder) AddRole(role *rbacv1.Role) error {
@@ -64,7 +90,34 @@ func (b *Builder) AddClusterRole(cr *rbacv1.ClusterRole) error {
 	node.Metadata.IsClusterRole = true
 	node.Metadata.Rules = convertRules(cr.Rules)
 
-	return b.graph.AddNode(node)
+	// Phase 4: mark aggregated ClusterRoles and add EdgeAggregates edges.
+	if cr.AggregationRule != nil && len(cr.AggregationRule.ClusterRoleSelectors) > 0 {
+		node.Metadata.IsAggregated = true
+	}
+
+	if err := b.graph.AddNode(node); err != nil {
+		return err
+	}
+
+	// Add EdgeAggregates edges to source roles selected by label.
+	// The graph may not have all source roles yet, so we attempt best-effort.
+	// The analysis layer re-resolves these at audit time.
+	if cr.AggregationRule != nil {
+		for _, selector := range cr.AggregationRule.ClusterRoleSelectors {
+			for k, v := range selector.MatchLabels {
+				// Store aggregation label info in an edge with metadata.
+				// The To node is a synthetic "label selector" target that
+				// the analysis layer resolves by scanning all ClusterRoles
+				// with matching labels.
+				targetID := "label-selector:" + k + "=" + v
+				edge := NewEdge(EdgeAggregates, node.ID, targetID)
+				edge.Metadata.AggregationLabel = k + "=" + v
+				_ = b.graph.AddEdge(edge) // best-effort; target may not exist yet
+			}
+		}
+	}
+
+	return nil
 }
 
 func (b *Builder) AddRoleBinding(rb *rbacv1.RoleBinding) error {
@@ -256,6 +309,25 @@ func (b *Builder) AddPod(pod *corev1.Pod) error {
 	node.Metadata.WorkloadKind = "Pod"
 	node.Metadata.Replicas = 1
 	node.Metadata.PodSecurityContext = extractPodSecurityContext(&pod.Spec)
+
+	// Phase 3: parse projected volume mounts to capture token audience/expiry.
+	for _, vol := range pod.Spec.Volumes {
+		if vol.Projected == nil {
+			continue
+		}
+		for _, src := range vol.Projected.Sources {
+			if src.ServiceAccountToken == nil {
+				continue
+			}
+			sat := src.ServiceAccountToken
+			if node.Metadata.TokenAudience == "" && sat.Audience != "" {
+				node.Metadata.TokenAudience = sat.Audience
+			}
+			if node.Metadata.TokenExpirationSeconds == 0 && sat.ExpirationSeconds != nil {
+				node.Metadata.TokenExpirationSeconds = *sat.ExpirationSeconds
+			}
+		}
+	}
 
 	if err := b.graph.AddNode(node); err != nil {
 		return err
