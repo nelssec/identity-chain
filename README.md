@@ -462,15 +462,15 @@ graph TD
 
 ### Kubernetes Distributions
 
-| Distribution | Support | Notes |
-|--------------|---------|-------|
-| EKS | Full | IRSA cloud identity |
-| GKE | Full | Workload Identity |
-| AKS | Full | Workload Identity |
-| OpenShift | Full | Includes SCC analysis |
-| Rancher/RKE | Full | Standard RBAC |
-| k3s/k0s | Full | Standard RBAC |
-| Vanilla K8s | Full | Standard RBAC |
+| Distribution | Support | Detection Mechanism |
+|--------------|---------|---------------------|
+| Kubernetes (vanilla) | Full | Default fallback |
+| OpenShift | Full | SCC CRD discovery |
+| EKS | Full | `eks.amazonaws.com/` node labels, `aws-node` daemonset |
+| GKE | Full | `cloud.google.com/gke-nodepool` node labels |
+| AKS | Full | `kubernetes.azure.com/` node labels |
+| RKE2 | Full | `rke2` node annotations/labels |
+| k3s | Full | `k3s` node annotations/labels |
 
 ### Cloud Identity Federation
 

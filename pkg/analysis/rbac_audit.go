@@ -184,6 +184,13 @@ var AllChecks = []AuditCheck{
 		Category:    CategoryOverPermissive,
 		Check:       checkDangerousVerbs,
 	},
+	{
+		ID:          "RBAC018",
+		Name:        "ServiceAccount Token Create",
+		Description: "Service accounts that can create tokens for other service accounts (TokenRequest API abuse)",
+		Category:    CategoryPrivilegeEscalation,
+		Check:       checkTokenCreate,
+	},
 }
 
 // RunRBACAudit performs all security checks on the graph

@@ -542,3 +542,48 @@ func GetUnusedServiceAccounts(g *graph.Graph, opts UsageAnalysisOptions) []Unuse
 	result := AnalyzeUsage(g, opts)
 	return result.UnusedServiceAccounts
 }
+
+// isSystemNamespace returns true when the namespace is a Kubernetes or common
+// distribution system namespace that should be excluded from user-facing audits.
+// It honours any DistroProfile stored on the graph for platform-specific prefixes.
+func isSystemNamespace(ns string) bool {
+	// Core system namespaces (always excluded).
+	switch ns {
+	case "kube-system", "kube-public", "kube-node-lease":
+		return true
+	}
+	// Common distribution system namespace prefixes.
+	systemPrefixes := []string{
+		"kube-",
+		"openshift-",
+		"cattle-system",
+		"rancher-",
+		"gke-",
+		"gmp-",
+		"aks-",
+	}
+	for _, prefix := range systemPrefixes {
+		if len(ns) >= len(prefix) && ns[:len(prefix)] == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// findWorkloadsUsingSA returns all workload nodes that have an EdgeUses edge
+// pointing to the given service account node.
+func findWorkloadsUsingSA(g *graph.Graph, sa *graph.Node) []*graph.Node {
+	var workloads []*graph.Node
+
+	inEdges := g.GetInEdges(sa.ID)
+	for _, edge := range inEdges {
+		if edge.Type == graph.EdgeUses {
+			workload := g.GetNode(edge.From)
+			if workload != nil && workload.Type == graph.NodeWorkload {
+				workloads = append(workloads, workload)
+			}
+		}
+	}
+
+	return workloads
+}

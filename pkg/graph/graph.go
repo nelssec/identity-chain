@@ -14,6 +14,9 @@ type Graph struct {
 	nodesByType      map[NodeType][]*Node
 	nodesByNamespace map[string][]*Node
 	saToWorkloads    map[string][]string
+	// Metadata is an open-ended key/value store for graph-level annotations
+	// such as the DistroProfile detected during collection.
+	Metadata map[string]interface{}
 }
 
 func New() *Graph {
@@ -25,6 +28,7 @@ func New() *Graph {
 		nodesByType:      make(map[NodeType][]*Node),
 		nodesByNamespace: make(map[string][]*Node),
 		saToWorkloads:    make(map[string][]string),
+		Metadata:         make(map[string]interface{}),
 	}
 }
 
