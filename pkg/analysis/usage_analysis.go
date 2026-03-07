@@ -3,6 +3,7 @@ package analysis
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/nelssec/identity-chain/pkg/graph"
 )
@@ -99,6 +100,40 @@ type UsageAnalysisSummary struct {
 	HighRiskUnused          int            `json:"high_risk_unused"`
 	WithUnusedCloudPerms    int            `json:"with_unused_cloud_perms"`
 	AvgOverProvisionRate    float64        `json:"avg_over_provision_rate"`
+}
+
+// isSystemNamespace returns true if the namespace is a Kubernetes system namespace.
+// It mirrors collector.IsSystemNamespace but avoids the import cycle by replicating
+// the lightweight logic here. Extended patterns cover common distro-specific namespaces.
+func isSystemNamespace(ns string) bool {
+	systemNamespaces := map[string]bool{
+		"kube-system":     true,
+		"kube-public":     true,
+		"kube-node-lease": true,
+	}
+	if systemNamespaces[ns] {
+		return true
+	}
+	// Cover common distro / add-on namespaces without pulling in the collector package.
+	prefixes := []string{
+		"openshift-",
+		"cattle-",
+		"fleet-",
+		"rancher-",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(ns, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// findWorkloadsUsingSA returns all workload nodes that have an EdgeUses edge pointing
+// to the given service-account node. The graph already maintains a saToWorkloads index
+// (accessed via GetWorkloadsUsingSA), so we delegate to it for efficiency.
+func findWorkloadsUsingSA(g *graph.Graph, sa *graph.Node) []*graph.Node {
+	return g.GetWorkloadsUsingSA(sa.ID)
 }
 
 func AnalyzeUsage(g *graph.Graph, opts UsageAnalysisOptions) *UsageAnalysisResult {

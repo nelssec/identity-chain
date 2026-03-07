@@ -6,16 +6,19 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/nelssec/identity-chain/pkg/collector/distro"
 	"github.com/nelssec/identity-chain/pkg/graph"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
 type KubernetesCollector struct {
-	client  kubernetes.Interface
-	options Options
+	client        kubernetes.Interface
+	options       Options
+	DistroProfile *distro.DistroProfile
 }
 
 func NewKubernetesCollector(opts Options) (*KubernetesCollector, error) {
@@ -29,10 +32,23 @@ func NewKubernetesCollector(opts Options) (*KubernetesCollector, error) {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
-	return &KubernetesCollector{
+	dynClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		// Non-fatal: distro detection will fall back to node-label based detection.
+		dynClient = nil
+	}
+
+	c := &KubernetesCollector{
 		client:  client,
 		options: opts,
-	}, nil
+	}
+
+	// Run distro detection before collecting so analysis can use the profile.
+	ctx := context.Background()
+	profile := distro.AutoDetect(ctx, client, dynClient)
+	c.DistroProfile = &profile
+
+	return c, nil
 }
 
 func getKubeConfig(opts Options) (*rest.Config, error) {
@@ -91,6 +107,18 @@ func (c *KubernetesCollector) Collect(ctx context.Context, builder *graph.Builde
 	builder.BuildResourceEdges()
 
 	c.buildCloudRoleEdges(builder)
+
+	// Wire the DistroProfile detected at collector-creation time onto the graph
+	// so analysis passes can consult it without re-detecting the platform.
+	if c.DistroProfile != nil {
+		g := builder.Build()
+		g.DistroProfile = &graph.GraphDistroProfile{
+			Platform:        c.DistroProfile.Platform,
+			CloudProvider:   c.DistroProfile.CloudProvider,
+			SystemNSPrefixes: c.DistroProfile.SystemNamespacePrefixes,
+			FeatureFlags:    c.DistroProfile.FeatureFlags,
+		}
+	}
 
 	return nil
 }

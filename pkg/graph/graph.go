@@ -5,6 +5,17 @@ import (
 	"sync"
 )
 
+// GraphDistroProfile holds distro-specific metadata stored on the graph so
+// that analysis passes can consult it without re-detecting the platform.
+// It mirrors the fields in collector/distro.DistroProfile but is defined here
+// to avoid an import cycle.
+type GraphDistroProfile struct {
+	Platform        string          `json:"platform"`
+	CloudProvider   string          `json:"cloud_provider,omitempty"`
+	SystemNSPrefixes []string       `json:"system_ns_prefixes,omitempty"`
+	FeatureFlags    map[string]bool `json:"feature_flags,omitempty"`
+}
+
 type Graph struct {
 	mu               sync.RWMutex
 	nodes            map[string]*Node
@@ -14,6 +25,8 @@ type Graph struct {
 	nodesByType      map[NodeType][]*Node
 	nodesByNamespace map[string][]*Node
 	saToWorkloads    map[string][]string
+	// Metadata.DistroProfile is set by the collector after platform detection.
+	DistroProfile    *GraphDistroProfile
 }
 
 func New() *Graph {

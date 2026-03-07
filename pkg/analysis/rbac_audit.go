@@ -184,6 +184,27 @@ var AllChecks = []AuditCheck{
 		Category:    CategoryOverPermissive,
 		Check:       checkDangerousVerbs,
 	},
+	{
+		ID:          "RBAC016",
+		Name:        "Short-lived or Custom-Audience Projected Tokens",
+		Description: "Workloads using projected service account tokens with non-standard audiences or long expiry",
+		Category:    CategorySecretAccess,
+		Check:       checkProjectedTokens,
+	},
+	{
+		ID:          "RBAC017",
+		Name:        "Projected SA Token Bypasses automountServiceAccountToken=false",
+		Description: "ServiceAccount has automountServiceAccountToken=false but a projected SA token volume is used, bypassing the flag",
+		Category:    CategoryDefaultConfig,
+		Check:       checkProjectedTokenBypass,
+	},
+	{
+		ID:          "RBAC018",
+		Name:        "ServiceAccount Token Create Permission (TokenRequest Abuse)",
+		Description: "Service accounts that can create serviceaccounts/token (TokenRequest API abuse)",
+		Category:    CategoryPrivilegeEscalation,
+		Check:       checkTokenCreatePermission,
+	},
 }
 
 // RunRBACAudit performs all security checks on the graph
@@ -358,6 +379,46 @@ func checkWildcardPermissions(g *graph.Graph, opts RBACAuditOptions) []RBACFindi
 			continue
 		}
 
+		// Phase 4: use aggregation-aware rule resolution so that aggregated
+		// ClusterRoles are also checked against source role wildcards.
+		effectiveRules := resolveAggregatedRules(g, role)
+		for _, rule := range effectiveRules {
+			hasWildcardRes := containsString(rule.Resources, "*")
+			hasWildcardVerb := containsString(rule.Verbs, "*")
+
+			if hasWildcardRes {
+				affectedRoles = append(affectedRoles, AffectedResource{
+					Kind:      roleKind(role),
+					Namespace: role.Namespace,
+					Name:      role.Name,
+					Details:   "Has wildcard (*) resource access" + func() string {
+						if role.Metadata.IsAggregated {
+							return " (via aggregation)"
+						}
+						return ""
+					}(),
+				})
+			}
+
+			if hasWildcardVerb {
+				for _, res := range rule.Resources {
+					affectedVerbs = append(affectedVerbs, AffectedResource{
+						Kind:      roleKind(role),
+						Namespace: role.Namespace,
+						Name:      role.Name,
+						Details:   "Has wildcard (*) verb on " + res + func() string {
+							if role.Metadata.IsAggregated {
+								return " (via aggregation)"
+							}
+							return ""
+						}(),
+					})
+					break
+				}
+			}
+		}
+
+		// Also check EdgeGrants edges for backward compatibility.
 		edges := g.GetOutEdges(role.ID)
 		for _, e := range edges {
 			if e.Type != graph.EdgeGrants {
@@ -590,29 +651,30 @@ func checkBindEscalate(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
 
 		roles := collectBoundRoles(g, sa.ID)
 		for _, role := range roles {
-			edges := g.GetOutEdges(role.ID)
-			for _, e := range edges {
-				if e.Type != graph.EdgeGrants {
-					continue
+			// Phase 4: check aggregated rules as well as direct EdgeGrants.
+			effectiveRules := resolveAggregatedRules(g, role)
+			for _, rule := range effectiveRules {
+				hasBind := containsString(rule.Verbs, "bind") || containsString(rule.Verbs, "*")
+				hasEscalate := containsString(rule.Verbs, "escalate") || containsString(rule.Verbs, "*")
+				suffix := ""
+				if role.Metadata.IsAggregated {
+					suffix = " (via aggregated ClusterRole)"
 				}
-
-				for _, v := range e.Metadata.Verbs {
-					if v == "bind" || v == "*" {
-						affectedBind = append(affectedBind, AffectedResource{
-							Kind:      "ServiceAccount",
-							Namespace: sa.Namespace,
-							Name:      sa.Name,
-							Details:   "Has 'bind' verb via " + role.Name,
-						})
-					}
-					if v == "escalate" || v == "*" {
-						affectedEscalate = append(affectedEscalate, AffectedResource{
-							Kind:      "ServiceAccount",
-							Namespace: sa.Namespace,
-							Name:      sa.Name,
-							Details:   "Has 'escalate' verb via " + role.Name,
-						})
-					}
+				if hasBind {
+					affectedBind = append(affectedBind, AffectedResource{
+						Kind:      "ServiceAccount",
+						Namespace: sa.Namespace,
+						Name:      sa.Name,
+						Details:   "Has 'bind' verb via " + role.Name + suffix,
+					})
+				}
+				if hasEscalate {
+					affectedEscalate = append(affectedEscalate, AffectedResource{
+						Kind:      "ServiceAccount",
+						Namespace: sa.Namespace,
+						Name:      sa.Name,
+						Details:   "Has 'escalate' verb via " + role.Name + suffix,
+					})
 				}
 			}
 		}
@@ -1106,4 +1168,263 @@ func roleKind(role *graph.Node) string {
 		return "ClusterRole"
 	}
 	return "Role"
+}
+
+// ---------------------------------------------------------------------------
+// Aggregation helpers (Phase 4)
+// ---------------------------------------------------------------------------
+
+// resolveAggregatedRules returns the effective []graph.Rule for a role,
+// expanding aggregated ClusterRoles by following EdgeAggregates edges and
+// matching source ClusterRoles by their labels.
+func resolveAggregatedRules(g *graph.Graph, role *graph.Node) []graph.Rule {
+	if !role.Metadata.IsAggregated {
+		return role.Metadata.Rules
+	}
+
+	// Collect all label selectors declared on this aggregated role.
+	aggregationLabels := make(map[string]string)
+	for _, e := range g.GetOutEdges(role.ID) {
+		if e.Type != graph.EdgeAggregates {
+			continue
+		}
+		if e.Metadata.AggregationLabel != "" {
+			parts := strings.SplitN(e.Metadata.AggregationLabel, "=", 2)
+			if len(parts) == 2 {
+				aggregationLabels[parts[0]] = parts[1]
+			}
+		}
+	}
+
+	if len(aggregationLabels) == 0 {
+		return role.Metadata.Rules
+	}
+
+	// Scan all ClusterRoles for matching labels and collect their rules.
+	var effectiveRules []graph.Rule
+	effectiveRules = append(effectiveRules, role.Metadata.Rules...)
+
+	for _, candidate := range g.GetNodesByType(graph.NodeRole) {
+		if !candidate.Metadata.IsClusterRole || candidate.ID == role.ID {
+			continue
+		}
+		// Check if this candidate matches all aggregation labels.
+		if matchesAllLabels(candidate.Labels, aggregationLabels) {
+			effectiveRules = append(effectiveRules, candidate.Metadata.Rules...)
+		}
+	}
+
+	return effectiveRules
+}
+
+// matchesAllLabels returns true when all key=value pairs in selector are
+// present in labels.
+func matchesAllLabels(labels, selector map[string]string) bool {
+	for k, v := range selector {
+		if labels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// RBAC016 – Short-lived or Custom-Audience Projected Tokens
+// ---------------------------------------------------------------------------
+
+// checkProjectedTokens flags workloads whose projected SA tokens have a non-standard
+// audience (not "sts.amazonaws.com" on EKS IRSA) or an expirationSeconds > 86400 (24h).
+func checkProjectedTokens(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
+	var findings []RBACFinding
+	var longExpiry []AffectedResource
+	var badAudience []AffectedResource
+
+	workloads := g.GetNodesByType(graph.NodeWorkload)
+	for _, wl := range workloads {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(wl.Namespace) {
+			continue
+		}
+		if opts.Namespace != "" && wl.Namespace != opts.Namespace {
+			continue
+		}
+
+		if wl.Metadata.TokenAudience == "" && wl.Metadata.TokenExpirationSeconds == 0 {
+			continue // no projected token
+		}
+
+		// Flag long expiry (> 24h)
+		if wl.Metadata.TokenExpirationSeconds > 86400 {
+			longExpiry = append(longExpiry, AffectedResource{
+				Kind:      wl.Metadata.WorkloadKind,
+				Namespace: wl.Namespace,
+				Name:      wl.Name,
+				Details:   "Token expirationSeconds > 86400",
+			})
+		}
+
+		// On EKS (detected via EdgeAssumes to aws cloud role), audience should be sts.amazonaws.com
+		// Check whether this workload's SA has an IRSA annotation.
+		for _, e := range g.GetOutEdges(wl.ID) {
+			if e.Type != graph.EdgeUses {
+				continue
+			}
+			saNode := g.GetNode(e.To)
+			if saNode == nil || saNode.Type != graph.NodeServiceAccount {
+				continue
+			}
+			if saNode.Metadata.CloudRoleARN != "" {
+				// IRSA SA – audience should be sts.amazonaws.com
+				if wl.Metadata.TokenAudience != "" && wl.Metadata.TokenAudience != "sts.amazonaws.com" {
+					badAudience = append(badAudience, AffectedResource{
+						Kind:      wl.Metadata.WorkloadKind,
+						Namespace: wl.Namespace,
+						Name:      wl.Name,
+						Details:   "IRSA SA but token audience is '" + wl.Metadata.TokenAudience + "' (expected sts.amazonaws.com)",
+					})
+				}
+			}
+		}
+	}
+
+	if len(longExpiry) > 0 {
+		findings = append(findings, RBACFinding{
+			CheckID:     "RBAC016",
+			Severity:    graph.SeverityMedium,
+			Category:    CategorySecretAccess,
+			Title:       "Projected SA token with long expiry",
+			Description: "Projected service account tokens with expirationSeconds > 86400 (24h) increase the window for token theft",
+			Affected:    longExpiry,
+			Remediation: "Set expirationSeconds ≤ 3600 (1h) for projected service account tokens",
+		})
+	}
+	if len(badAudience) > 0 {
+		findings = append(findings, RBACFinding{
+			CheckID:     "RBAC016",
+			Severity:    graph.SeverityHigh,
+			Category:    CategorySecretAccess,
+			Title:       "IRSA projected token with non-standard audience",
+			Description: "IRSA projected tokens should use sts.amazonaws.com as the audience",
+			Affected:    badAudience,
+			Remediation: "Set serviceAccountToken audience to sts.amazonaws.com in projected volume source",
+		})
+	}
+
+	return findings
+}
+
+// ---------------------------------------------------------------------------
+// RBAC017 – Projected SA Token Bypasses automountServiceAccountToken=false
+// ---------------------------------------------------------------------------
+
+// checkProjectedTokenBypass flags service accounts that set
+// automountServiceAccountToken: false but are still accessed via a projected
+// volume, bypassing the flag entirely.
+func checkProjectedTokenBypass(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
+	var findings []RBACFinding
+	var affected []AffectedResource
+
+	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
+	for _, sa := range serviceAccounts {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
+			continue
+		}
+		if opts.Namespace != "" && sa.Namespace != opts.Namespace {
+			continue
+		}
+
+		// Only flag SAs where automount is explicitly false.
+		if sa.Metadata.AutomountToken {
+			continue
+		}
+
+		// Check whether any workload using this SA has a projected token volume.
+		workloads := g.GetWorkloadsUsingSA(sa.ID)
+		for _, wl := range workloads {
+			if wl.Metadata.TokenAudience != "" || wl.Metadata.TokenExpirationSeconds > 0 {
+				affected = append(affected, AffectedResource{
+					Kind:      wl.Metadata.WorkloadKind,
+					Namespace: wl.Namespace,
+					Name:      wl.Name,
+					Details:   "SA " + sa.Namespace + "/" + sa.Name + " has automountServiceAccountToken=false but workload uses a projected SA token volume",
+				})
+			}
+		}
+	}
+
+	if len(affected) > 0 {
+		findings = append(findings, RBACFinding{
+			CheckID:     "RBAC017",
+			Severity:    graph.SeverityMedium,
+			Category:    CategoryDefaultConfig,
+			Title:       "Projected SA token bypasses automountServiceAccountToken=false",
+			Description: "Setting automountServiceAccountToken: false on a ServiceAccount is bypassed when a projected serviceAccountToken volume source is explicitly declared in the pod spec",
+			Affected:    affected,
+			Remediation: "Remove the explicit projected serviceAccountToken volume or remove the automountServiceAccountToken=false annotation if the token is intentionally mounted",
+		})
+	}
+
+	return findings
+}
+
+// ---------------------------------------------------------------------------
+// RBAC018 – serviceaccounts/token create permission (TokenRequest abuse)
+// ---------------------------------------------------------------------------
+
+// checkTokenCreatePermission flags service accounts that can create tokens for
+// other service accounts via the TokenRequest API (POST /serviceaccounts/token).
+// This allows an attacker to obtain tokens for arbitrary service accounts.
+func checkTokenCreatePermission(g *graph.Graph, opts RBACAuditOptions) []RBACFinding {
+	var findings []RBACFinding
+	var affected []AffectedResource
+
+	serviceAccounts := g.GetNodesByType(graph.NodeServiceAccount)
+	for _, sa := range serviceAccounts {
+		if !opts.IncludeSystem && collector.IsSystemNamespace(sa.Namespace) {
+			continue
+		}
+		if opts.Namespace != "" && sa.Namespace != opts.Namespace {
+			continue
+		}
+
+		roles := collectBoundRoles(g, sa.ID)
+		for _, role := range roles {
+			for _, rule := range role.Metadata.Rules {
+				hasCreate := containsString(rule.Verbs, "create") || containsString(rule.Verbs, "*")
+				if !hasCreate {
+					continue
+				}
+				for _, res := range rule.Resources {
+					if res == "serviceaccounts/token" || res == "*" {
+						sev := graph.SeverityHigh
+						desc := "Can create tokens for ServiceAccounts in the namespace"
+						if role.Metadata.IsClusterRole {
+							sev = graph.SeverityCritical
+							desc = "Can create tokens for ANY ServiceAccount cluster-wide"
+						}
+						affected = append(affected, AffectedResource{
+							Kind:      "ServiceAccount",
+							Namespace: sa.Namespace,
+							Name:      sa.Name,
+							Details:   desc + " via " + roleKind(role) + "/" + role.Name,
+						})
+						_ = sev // severity used below in the aggregate finding
+					}
+				}
+			}
+		}
+	}
+
+	if len(affected) > 0 {
+		findings = append(findings, RBACFinding{
+			CheckID:     "RBAC018",
+			Severity:    graph.SeverityCritical,
+			Category:    CategoryPrivilegeEscalation,
+			Title:       "ServiceAccount can create tokens via TokenRequest API",
+			Description: "The serviceaccounts/token create permission allows an attacker to obtain short-lived tokens for any service account they can target, enabling privilege escalation",
+			Affected:    affected,
+			Remediation: "Remove serviceaccounts/token create permissions. Use RBAC to restrict token creation to specific service accounts using resourceNames",
+		})
+	}
+
+	return findings
 }

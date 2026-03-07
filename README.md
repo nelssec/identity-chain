@@ -462,15 +462,19 @@ graph TD
 
 ### Kubernetes Distributions
 
-| Distribution | Support | Notes |
-|--------------|---------|-------|
-| EKS | Full | IRSA cloud identity |
-| GKE | Full | Workload Identity |
-| AKS | Full | Workload Identity |
-| OpenShift | Full | Includes SCC analysis |
-| Rancher/RKE | Full | Standard RBAC |
-| k3s/k0s | Full | Standard RBAC |
-| Vanilla K8s | Full | Standard RBAC |
+Auto-detection runs at collection time. The `smart-scan` and `serve` commands
+report the detected platform in the scan summary.
+
+| Distribution | Support Level | Detection Mechanism | Notes |
+|--------------|---------------|---------------------|-------|
+| **Vanilla K8s** | Full | Default / fallback | Standard RBAC; kubeadm, kind, minikube |
+| **EKS** | Full | `eks.amazonaws.com/` node labels or `aws-node` daemonset | IRSA + Pod Identity; cloud IAM audit |
+| **GKE** | Full | `cloud.google.com/gke-nodepool` node label | Workload Identity; cloud IAM audit |
+| **AKS** | Full | `kubernetes.azure.com/` node labels | Azure Workload Identity; cloud IAM audit |
+| **OpenShift 4.x** | Full | `security.openshift.io` SCC CRD or `openshift-*` namespaces | SCC, Routes, OAuth, Build analysis |
+| **OpenShift 3.x** | Full | SCC CRD fallback | SCC analysis |
+| **RKE2** | Full | `rke2.io/` node annotations or `rke.cattle.io/` labels | cattle-system / fleet-* treated as system namespaces |
+| **K3s** | Full | `k3s.io/` node annotations / labels | Standard RBAC; lightweight footprint |
 
 ### Cloud Identity Federation
 
