@@ -1927,6 +1927,8 @@ func remediateCmd() *cobra.Command {
 	var minSeverity string
 	var remType string
 	var manifestsOnly bool
+	var dryRun bool
+	var outputFormat string
 
 	cmd := &cobra.Command{
 		Use:   "remediate",
@@ -1938,7 +1940,14 @@ Examples:
   idc remediate -A -f fixes.yaml
   idc remediate -A --severity critical
   idc remediate -A --type rbac -f rbac-fixes.yaml
-  idc remediate -A --manifests-only`,
+  idc remediate -A --manifests-only
+  idc remediate -A --dry-run -o yaml > fixes.yaml
+  idc remediate -A --dry-run -o yaml | kubectl apply --dry-run=client -f -
+
+Dry-run workflow:
+  idc remediate -A --dry-run -o yaml > fixes.yaml   # generate patches
+  kubectl apply -f fixes.yaml --dry-run=client       # validate
+  kubectl apply -f fixes.yaml                        # apply`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
@@ -2013,6 +2022,21 @@ Examples:
 				out = os.Stdout
 			}
 
+			if dryRun || outputFormat == "yaml" {
+				yaml := result.GenerateDryRunYAML()
+				if yaml == "" {
+					fmt.Fprintln(os.Stderr, "No actionable manifests to output.")
+					return nil
+				}
+				fmt.Fprint(out, yaml)
+				if outputFile != "" {
+					fmt.Fprintf(os.Stderr, "Dry-run manifests saved to: %s\n", outputFile)
+					fmt.Fprintf(os.Stderr, "\nTo validate: kubectl apply -f %s --dry-run=client\n", outputFile)
+					fmt.Fprintf(os.Stderr, "To apply:    kubectl apply -f %s\n", outputFile)
+				}
+				return nil
+			}
+
 			if manifestsOnly {
 				fmt.Fprint(out, result.CombinedManifests)
 				if outputFile != "" {
@@ -2082,6 +2106,8 @@ Examples:
 	cmd.Flags().StringVar(&minSeverity, "severity", "", "Minimum severity to include (critical, high, medium, low)")
 	cmd.Flags().StringVar(&remType, "type", "", "Filter by type (rbac, pod-security, network-policy)")
 	cmd.Flags().BoolVar(&manifestsOnly, "manifests-only", false, "Output only the YAML manifests")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Output actionable YAML patches for kubectl apply (skips review-only manifests)")
+	cmd.Flags().StringVarP(&outputFormat, "output", "o", "", "Output format: yaml (same as --dry-run)")
 
 	return cmd
 }
