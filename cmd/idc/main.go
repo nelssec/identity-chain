@@ -33,6 +33,10 @@ var (
 	awsRegion     string
 	gcpProject    string
 	azureSubID    string
+	verbose       bool
+	noColor       bool
+	compact       bool
+	exportHTML    string
 )
 
 // resolveWorkloadNodeID finds the node ID for a workload reference
@@ -77,6 +81,10 @@ Examples:
 	rootCmd.PersistentFlags().StringVar(&awsRegion, "aws-region", "", "AWS region for IAM lookups")
 	rootCmd.PersistentFlags().StringVar(&gcpProject, "gcp-project", "", "GCP project for IAM lookups")
 	rootCmd.PersistentFlags().StringVar(&azureSubID, "azure-subscription", "", "Azure subscription ID")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Show full finding details (default: compact one-liners)")
+	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "Disable color output")
+	rootCmd.PersistentFlags().BoolVar(&compact, "compact", false, "Compact JSON output (no indentation)")
+	rootCmd.PersistentFlags().StringVar(&exportHTML, "export-html", "", "Export self-contained HTML report to file")
 
 	rootCmd.AddCommand(blastCmd())
 	rootCmd.AddCommand(graphCmd())
@@ -143,7 +151,7 @@ Examples:
 				return fmt.Errorf("failed to collect cluster data: %w", err)
 			}
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 
 			if all {
 				results, err := analysis.AllWorkloadBlastRadius(g)
@@ -197,7 +205,7 @@ Examples:
 				return fmt.Errorf("failed to collect cluster data: %w", err)
 			}
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 			return writer.WriteGraph(g)
 		},
 	}
@@ -223,7 +231,7 @@ Examples:
 				return fmt.Errorf("failed to collect cluster data: %w", err)
 			}
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 			return writer.WriteStats(g.Stats())
 		},
 	}
@@ -273,6 +281,23 @@ func collectGraph(ctx context.Context) (*graph.Graph, error) {
 	}
 
 	return builder.Build(), nil
+}
+
+// maybeExportHTML writes an HTML report if --export-html is set.
+func maybeExportHTML(data output.ExportHTMLData) error {
+	if exportHTML == "" {
+		return nil
+	}
+	f, err := os.Create(exportHTML)
+	if err != nil {
+		return fmt.Errorf("failed to create HTML export file: %w", err)
+	}
+	defer f.Close()
+	if err := output.ExportHTML(f, data); err != nil {
+		return fmt.Errorf("failed to write HTML export: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "HTML report exported to: %s\n", exportHTML)
+	return nil
 }
 
 func unusedCmd() *cobra.Command {
@@ -811,7 +836,7 @@ Examples:
 					return fmt.Errorf("privesc analysis failed: %w", err)
 				}
 
-				writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+				writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 				return writer.WritePrivescResults(results)
 			}
 
@@ -910,7 +935,7 @@ Examples:
 				return fmt.Errorf("whocan query failed: %w", err)
 			}
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 			return writer.WriteWhoCanResult(result)
 		},
 	}
@@ -952,7 +977,7 @@ Examples:
 				return fmt.Errorf("whatcan query failed: %w", err)
 			}
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 			return writer.WriteWhatCanResult(result)
 		},
 	}
@@ -1002,8 +1027,11 @@ Examples:
 
 			result := analysis.RunRBACAudit(g, opts)
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
-			return writer.WriteRBACAuditResult(result)
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
+			if err := writer.WriteRBACAuditResult(result); err != nil {
+				return err
+			}
+			return maybeExportHTML(output.ExportHTMLData{RBACAudit: result})
 		},
 	}
 
@@ -1042,7 +1070,7 @@ Examples:
 
 			result := analysis.AnalyzeCloudIAM(g)
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 			return writer.WriteCloudAuditResult(result)
 		},
 	}
@@ -1094,7 +1122,7 @@ Examples:
 
 			result := analysis.RunPodSecurityAudit(g, opts)
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 			return writer.WritePodSecurityResult(result)
 		},
 	}
@@ -1147,7 +1175,7 @@ Examples:
 
 			result := analysis.RunNetworkPolicyAudit(g, opts)
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 			return writer.WriteNetworkPolicyResult(result)
 		},
 	}
@@ -1197,7 +1225,7 @@ Examples:
 				opts.Namespace = ""
 			}
 
-			writer := output.NewWriter(os.Stdout, output.Format(outputFormat))
+			writer := output.NewWriterWithOptions(os.Stdout, output.Format(outputFormat), output.WriterOptions{Verbose: verbose, NoColor: noColor, Compact: compact})
 
 			if all {
 				results, err := analysis.FindAllAttackPaths(g, opts)

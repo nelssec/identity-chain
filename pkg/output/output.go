@@ -30,13 +30,27 @@ type Writer interface {
 	WriteAttackPathResults(results []*analysis.AttackPathResult) error
 }
 
+// WriterOptions configures format-specific writer behavior.
+type WriterOptions struct {
+	Verbose bool
+	NoColor bool
+	Compact bool // JSON compact mode (no indentation)
+}
+
 func NewWriter(w io.Writer, format Format) Writer {
+	return NewWriterWithOptions(w, format, WriterOptions{})
+}
+
+func NewWriterWithOptions(w io.Writer, format Format, opts WriterOptions) Writer {
 	switch format {
 	case FormatJSON:
-		return NewJSONWriter(w)
+		return NewJSONWriterWithOptions(w, JSONOptions{Compact: opts.Compact})
 	case FormatDOT:
 		return NewDOTWriter(w)
 	default:
-		return NewTableWriter(w)
+		return NewTableWriterWithOptions(w, TableOptions{
+			Verbose: opts.Verbose,
+			NoColor: opts.NoColor,
+		})
 	}
 }
