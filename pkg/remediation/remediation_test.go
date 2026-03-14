@@ -62,13 +62,17 @@ func TestRemediationResult_GenerateCombinedManifests(t *testing.T) {
 	rr := &RemediationResult{
 		Remediations: []Remediation{
 			{
-				CheckID: "RBAC001",
+				CheckID:   "RBAC001",
+				FindingID: "RBAC001-cluster-wide-admin-binding",
+				Severity:  "critical",
 				Manifests: []Manifest{
 					{Action: "create", Description: "Create role", YAML: "kind: Role\nname: test"},
 				},
 			},
 			{
-				CheckID: "PSS001",
+				CheckID:   "PSS001",
+				FindingID: "PSS001-privileged-container",
+				Severity:  "high",
 				Manifests: []Manifest{
 					{Action: "patch", Description: "Patch deployment", YAML: "kind: Deployment\nname: app"},
 				},
@@ -81,11 +85,17 @@ func TestRemediationResult_GenerateCombinedManifests(t *testing.T) {
 	if combined == "" {
 		t.Fatal("combined manifests should not be empty")
 	}
-	if !strings.Contains(combined, "# RBAC001: Create role") {
-		t.Error("should contain RBAC001 comment header")
+	if !strings.Contains(combined, "# idc: RBAC001-cluster-wide-admin-binding critical") {
+		t.Error("should contain idc traceability comment for RBAC finding")
 	}
-	if !strings.Contains(combined, "# PSS001: Patch deployment") {
-		t.Error("should contain PSS001 comment header")
+	if !strings.Contains(combined, "# Action: Create role") {
+		t.Error("should contain action comment for RBAC finding")
+	}
+	if !strings.Contains(combined, "# idc: PSS001-privileged-container high") {
+		t.Error("should contain idc traceability comment for PSS finding")
+	}
+	if !strings.Contains(combined, "# Action: Patch deployment") {
+		t.Error("should contain action comment for PSS finding")
 	}
 	if !strings.Contains(combined, "---\n") {
 		t.Error("should contain separator between manifests")

@@ -222,3 +222,190 @@ metadata:
 		t.Errorf("expected dry-run manifest to appear once (deduplication), but appeared %d times", count)
 	}
 }
+
+func TestGenerateCombinedManifests_TraceabilityComments(t *testing.T) {
+	rr := &RemediationResult{
+		Remediations: []Remediation{
+			{
+				FindingID: "RBAC001-admin-binding",
+				Severity:  "critical",
+				CheckID:   "RBAC001",
+				Manifests: []Manifest{
+					{Action: "create", Description: "Create restricted role", YAML: "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: restricted"},
+				},
+			},
+		},
+	}
+
+	combined := rr.GenerateCombinedManifests()
+
+	if !strings.Contains(combined, "# idc: RBAC001-admin-binding critical") {
+		t.Errorf("expected idc traceability comment, got:\n%s", combined)
+	}
+	if !strings.Contains(combined, "# Action: Create restricted role") {
+		t.Errorf("expected action comment, got:\n%s", combined)
+	}
+}
+
+func TestGenerateCombinedManifests_RBACValidYAML(t *testing.T) {
+	rr := &RemediationResult{
+		Remediations: []Remediation{
+			{
+				FindingID: "RBAC002-wildcard",
+				Severity:  "high",
+				CheckID:   "RBAC002",
+				Type:      RemediationRBAC,
+				Manifests: []Manifest{
+					{Action: "create", Description: "Create scoped role", YAML: "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: scoped-role\n  namespace: default"},
+				},
+			},
+		},
+	}
+
+	combined := rr.GenerateCombinedManifests()
+
+	if !strings.Contains(combined, "apiVersion:") {
+		t.Error("RBAC manifest should contain apiVersion")
+	}
+	if !strings.Contains(combined, "kind: Role") {
+		t.Error("RBAC manifest should contain kind: Role")
+	}
+}
+
+func TestGenerateCombinedManifests_NetworkPolicyValidYAML(t *testing.T) {
+	rr := &RemediationResult{
+		Remediations: []Remediation{
+			{
+				FindingID: "NETPOL001-no-policy",
+				Severity:  "medium",
+				CheckID:   "NETPOL001",
+				Type:      RemediationNetworkPolicy,
+				Manifests: []Manifest{
+					{Action: "create", Description: "Create default deny policy", YAML: "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: default-deny\n  namespace: default"},
+				},
+			},
+		},
+	}
+
+	combined := rr.GenerateCombinedManifests()
+
+	if !strings.Contains(combined, "apiVersion: networking.k8s.io/v1") {
+		t.Error("NetworkPolicy manifest should contain correct apiVersion")
+	}
+	if !strings.Contains(combined, "kind: NetworkPolicy") {
+		t.Error("NetworkPolicy manifest should contain kind: NetworkPolicy")
+	}
+}
+
+func TestGenerateCombinedManifests_PodSecurityValidYAML(t *testing.T) {
+	rr := &RemediationResult{
+		Remediations: []Remediation{
+			{
+				FindingID: "PSS001-privileged",
+				Severity:  "critical",
+				CheckID:   "PSS001",
+				Type:      RemediationPodSecurity,
+				Manifests: []Manifest{
+					{Action: "patch", Description: "Set security context", YAML: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\n  namespace: default"},
+				},
+			},
+		},
+	}
+
+	combined := rr.GenerateCombinedManifests()
+
+	if !strings.Contains(combined, "apiVersion: apps/v1") {
+		t.Error("PodSecurity manifest should contain apiVersion")
+	}
+	if !strings.Contains(combined, "kind: Deployment") {
+		t.Error("PodSecurity manifest should contain kind: Deployment")
+	}
+}
+
+func TestGenerateCombinedManifests_MultipleFindingsSeparators(t *testing.T) {
+	rr := &RemediationResult{
+		Remediations: []Remediation{
+			{
+				FindingID: "RBAC001-binding",
+				Severity:  "critical",
+				CheckID:   "RBAC001",
+				Manifests: []Manifest{
+					{Action: "create", Description: "First fix", YAML: "kind: Role\nmetadata:\n  name: role1"},
+				},
+			},
+			{
+				FindingID: "NETPOL001-missing",
+				Severity:  "medium",
+				CheckID:   "NETPOL001",
+				Manifests: []Manifest{
+					{Action: "create", Description: "Second fix", YAML: "kind: NetworkPolicy\nmetadata:\n  name: np1"},
+				},
+			},
+			{
+				FindingID: "PSS001-priv",
+				Severity:  "high",
+				CheckID:   "PSS001",
+				Manifests: []Manifest{
+					{Action: "patch", Description: "Third fix", YAML: "kind: Deployment\nmetadata:\n  name: dep1"},
+				},
+			},
+		},
+	}
+
+	combined := rr.GenerateCombinedManifests()
+
+	separatorCount := strings.Count(combined, "---\n")
+	if separatorCount != 2 {
+		t.Errorf("expected 2 separators between 3 manifests, got %d", separatorCount)
+	}
+
+	if !strings.Contains(combined, "# idc: RBAC001-binding critical") {
+		t.Error("should contain first finding traceability comment")
+	}
+	if !strings.Contains(combined, "# idc: NETPOL001-missing medium") {
+		t.Error("should contain second finding traceability comment")
+	}
+	if !strings.Contains(combined, "# idc: PSS001-priv high") {
+		t.Error("should contain third finding traceability comment")
+	}
+}
+
+func TestGenerateCombinedManifests_DryRunOutput(t *testing.T) {
+	// Verify combined manifests can be used directly as kubectl input
+	rr := &RemediationResult{
+		Remediations: []Remediation{
+			{
+				FindingID: "RBAC001-test",
+				Severity:  "high",
+				CheckID:   "RBAC001",
+				Manifests: []Manifest{
+					{Action: "create", Description: "Create role", YAML: "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: test-role\n  namespace: default"},
+				},
+			},
+		},
+	}
+
+	combined := rr.GenerateCombinedManifests()
+
+	// Should start with a comment (traceability), not a separator
+	if !strings.HasPrefix(combined, "# idc:") {
+		t.Errorf("dry-run output should start with idc traceability comment, got: %s", combined[:min(50, len(combined))])
+	}
+
+	// Should contain valid YAML content
+	if !strings.Contains(combined, "apiVersion:") {
+		t.Error("dry-run output should contain valid YAML with apiVersion")
+	}
+
+	// CombinedManifests should be set on the result
+	if rr.CombinedManifests != combined {
+		t.Error("CombinedManifests field should be populated")
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

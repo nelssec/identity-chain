@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -1929,6 +1930,7 @@ func remediateCmd() *cobra.Command {
 	var manifestsOnly bool
 	var dryRun bool
 	var outputFormat string
+	var apply bool
 
 	cmd := &cobra.Command{
 		Use:   "remediate",
@@ -1943,11 +1945,13 @@ Examples:
   idc remediate -A --manifests-only
   idc remediate -A --dry-run -o yaml > fixes.yaml
   idc remediate -A --dry-run -o yaml | kubectl apply --dry-run=client -f -
+  idc remediate -A --apply
 
 Dry-run workflow:
   idc remediate -A --dry-run -o yaml > fixes.yaml   # generate patches
   kubectl apply -f fixes.yaml --dry-run=client       # validate
-  kubectl apply -f fixes.yaml                        # apply`,
+  kubectl apply -f fixes.yaml                        # apply
+  idc remediate -A --apply                           # apply with confirmation`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
@@ -2009,6 +2013,29 @@ Dry-run workflow:
 
 			if !allNamespaces && namespace != "default" {
 				result = remediation.FilterByNamespace(result, namespace)
+			}
+
+			yamlOnly := manifestsOnly || dryRun || outputFormat == "yaml"
+
+			if apply {
+				fmt.Fprintln(os.Stderr, "The following manifests will be applied to your cluster:\n")
+				fmt.Fprint(os.Stderr, result.CombinedManifests)
+				fmt.Fprintln(os.Stderr)
+				fmt.Fprint(os.Stderr, "Continue? [y/N] ")
+				var answer string
+				fmt.Scanln(&answer)
+				if strings.ToLower(answer) != "y" && strings.ToLower(answer) != "yes" {
+					fmt.Fprintln(os.Stderr, "Aborted.")
+					return nil
+				}
+				kc := exec.Command("kubectl", "apply", "-f", "-")
+				kc.Stdin = strings.NewReader(result.CombinedManifests)
+				kc.Stdout = os.Stdout
+				kc.Stderr = os.Stderr
+				if err := kc.Run(); err != nil {
+					return fmt.Errorf("kubectl apply failed: %w", err)
+				}
+				return nil
 			}
 
 			var out *os.File
@@ -2107,6 +2134,7 @@ Dry-run workflow:
 	cmd.Flags().StringVar(&remType, "type", "", "Filter by type (rbac, pod-security, network-policy)")
 	cmd.Flags().BoolVar(&manifestsOnly, "manifests-only", false, "Output only the YAML manifests")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Output actionable YAML patches for kubectl apply (skips review-only manifests)")
+	cmd.Flags().BoolVar(&apply, "apply", false, "Apply generated manifests to the cluster via kubectl")
 	cmd.Flags().StringVarP(&outputFormat, "output", "o", "", "Output format: yaml (same as --dry-run)")
 
 	return cmd
