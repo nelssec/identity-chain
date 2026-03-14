@@ -2,6 +2,7 @@ package remediation
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -72,13 +73,45 @@ func (rr *RemediationResult) GenerateCombinedManifests() string {
 			if combined != "" {
 				combined += "---\n"
 			}
-			combined += fmt.Sprintf("# %s: %s\n", r.CheckID, m.Description)
+			combined += fmt.Sprintf("# idc: %s %s\n", r.FindingID, r.Severity)
+			combined += fmt.Sprintf("# action: %s | %s\n", m.Action, m.Description)
 			combined += m.YAML + "\n"
 		}
 	}
 
 	rr.CombinedManifests = combined
 	return combined
+}
+
+// GenerateDryRunYAML generates clean YAML output suitable for kubectl apply.
+// It skips review-only manifests (where YAML starts with #) and includes
+// idc traceability comments before each manifest.
+func (rr *RemediationResult) GenerateDryRunYAML() string {
+	var parts []string
+	seen := make(map[string]bool)
+
+	for _, r := range rr.Remediations {
+		for _, m := range r.Manifests {
+			trimmed := strings.TrimSpace(m.YAML)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+
+			key := fmt.Sprintf("%s-%s", m.Action, m.YAML)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			block := fmt.Sprintf("# idc: %s %s\n%s", r.FindingID, r.Severity, m.YAML)
+			parts = append(parts, block)
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n---\n") + "\n"
 }
 
 func toYAMLString(obj interface{}) string {

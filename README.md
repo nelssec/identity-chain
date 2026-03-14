@@ -307,7 +307,19 @@ idc remediate -A -f fixes.yaml                    # Generate all fix manifests
 idc remediate -A --severity critical              # Only critical fixes
 idc remediate -A --type rbac -f rbac-fixes.yaml   # Only RBAC fixes
 idc remediate -A --manifests-only                 # Just YAML, no summary
+idc remediate -A --dry-run -o yaml > fixes.yaml   # Actionable YAML for kubectl apply
 ```
+
+**Dry-run workflow** — generate, validate, and apply patches:
+
+```bash
+idc remediate -A --dry-run -o yaml > fixes.yaml   # Generate actionable patches
+kubectl apply -f fixes.yaml --dry-run=client       # Validate against cluster
+kubectl apply -f fixes.yaml                        # Apply fixes
+```
+
+The `--dry-run` flag outputs only actionable K8s manifests (skipping review-only comments)
+with `# idc: <finding-id> <severity>` traceability comments before each resource.
 
 Generates ready-to-apply YAML for:
 - RBAC issues (cluster-admin, secrets access, wildcards)
