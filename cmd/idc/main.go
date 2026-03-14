@@ -2691,6 +2691,9 @@ func watchCmd() *cobra.Command {
 	var resyncPeriod string
 	var debouncePeriod string
 	var maxMemoryMB int
+	var baselineFile string
+	var alertOnDrift bool
+	var driftOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "watch",
@@ -2705,6 +2708,8 @@ Examples:
   idc watch -A
   idc watch -A --metrics-addr :8080
   idc watch -A --webhook-url https://hooks.slack.com/...
+  idc watch -A --baseline baseline.json --alert-on-drift
+  idc watch -A --baseline baseline.json --drift-only
   idc watch -A --resync-period 5m --debounce 30s --max-memory 256`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resync, err := time.ParseDuration(resyncPeriod)
@@ -2728,6 +2733,9 @@ Examples:
 				MaxMemoryMB:    maxMemoryMB,
 				MetricsAddr:    metricsAddr,
 				WebhookURL:     webhookURL,
+				BaselineFile:   baselineFile,
+				AlertOnDrift:   alertOnDrift,
+				DriftOnly:      driftOnly,
 			}
 
 			watcher, err := watch.New(config)
@@ -2745,6 +2753,9 @@ Examples:
 	cmd.Flags().StringVar(&resyncPeriod, "resync-period", "5m", "How often to fully resync with the API server")
 	cmd.Flags().StringVar(&debouncePeriod, "debounce", "30s", "Wait time after changes before re-analyzing")
 	cmd.Flags().IntVar(&maxMemoryMB, "max-memory", 0, "Maximum memory limit in MB (0 = no limit)")
+	cmd.Flags().StringVar(&baselineFile, "baseline", "", "Baseline snapshot file for drift detection")
+	cmd.Flags().BoolVar(&alertOnDrift, "alert-on-drift", false, "Alert when identity posture drifts from baseline")
+	cmd.Flags().BoolVar(&driftOnly, "drift-only", false, "Only output drift changes from baseline (suppress normal output)")
 
 	return cmd
 }
@@ -2826,6 +2837,67 @@ Examples:
 	return cmd
 }
 
+func runSnapshotScan(outputFile string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	g, err := collectGraph(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to collect cluster data: %w", err)
+	}
+
+	opts := analysis.RBACAuditOptions{
+		IncludeSystem: includeSystem,
+		Namespace:     namespace,
+	}
+	if allNamespaces {
+		opts.Namespace = ""
+	}
+	rbacResult := analysis.RunRBACAudit(g, opts)
+
+	podSecOpts := analysis.PodSecurityOptions{
+		IncludeSystem: includeSystem,
+		Namespace:     namespace,
+	}
+	if allNamespaces {
+		podSecOpts.Namespace = ""
+	}
+	podSecResult := analysis.RunPodSecurityAudit(g, podSecOpts)
+
+	netPolOpts := analysis.NetworkPolicyOptions{
+		IncludeSystem: includeSystem,
+		Namespace:     namespace,
+	}
+	if allNamespaces {
+		netPolOpts.Namespace = ""
+	}
+	netPolResult := analysis.RunNetworkPolicyAudit(g, netPolOpts)
+
+	var cloudFindings []analysis.CloudIAMFinding
+	if includeCloud {
+		cloudResult := analysis.AnalyzeCloudIAM(g)
+		cloudFindings = cloudResult.Findings
+	}
+
+	stats := g.Stats()
+	graphStats := &analysis.SnapshotGraphStats{
+		TotalNodes:    stats.TotalNodes,
+		TotalEdges:    stats.TotalEdges,
+		WorkloadCount: stats.NodeCounts[graph.NodeWorkload],
+		SACount:       stats.NodeCounts[graph.NodeServiceAccount],
+		RoleCount:     stats.NodeCounts[graph.NodeRole],
+	}
+
+	snap := analysis.NewSnapshot(analysis.ScanFindings{
+		RBACFindings:   rbacResult.Findings,
+		PodSecFindings: podSecResult.Findings,
+		NetPolFindings: netPolResult.Findings,
+		CloudFindings:  cloudFindings,
+	}, graphStats)
+
+	return analysis.WriteSnapshot(snap, outputFile)
+}
+
 func snapshotCmd() *cobra.Command {
 	var outputFile string
 
@@ -2837,116 +2909,125 @@ Use with 'idc diff' to compare snapshots over time.
 
 Examples:
   idc snapshot -A -f baseline.json
+  idc snapshot save -A --output baseline.json
   idc snapshot -A --include-cloud --aws-region us-west-2 -f baseline.json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-			defer cancel()
-
-			g, err := collectGraph(ctx)
-			if err != nil {
-				return fmt.Errorf("failed to collect cluster data: %w", err)
-			}
-
-			opts := analysis.RBACAuditOptions{
-				IncludeSystem: includeSystem,
-				Namespace:     namespace,
-			}
-			if allNamespaces {
-				opts.Namespace = ""
-			}
-			rbacResult := analysis.RunRBACAudit(g, opts)
-
-			podSecOpts := analysis.PodSecurityOptions{
-				IncludeSystem: includeSystem,
-				Namespace:     namespace,
-			}
-			if allNamespaces {
-				podSecOpts.Namespace = ""
-			}
-			podSecResult := analysis.RunPodSecurityAudit(g, podSecOpts)
-
-			netPolOpts := analysis.NetworkPolicyOptions{
-				IncludeSystem: includeSystem,
-				Namespace:     namespace,
-			}
-			if allNamespaces {
-				netPolOpts.Namespace = ""
-			}
-			netPolResult := analysis.RunNetworkPolicyAudit(g, netPolOpts)
-
-			var cloudFindings []analysis.CloudIAMFinding
-			if includeCloud {
-				cloudResult := analysis.AnalyzeCloudIAM(g)
-				cloudFindings = cloudResult.Findings
-			}
-
-			snapshot := struct {
-				Timestamp       string                          `json:"timestamp"`
-				RBACFindings    []analysis.RBACFinding          `json:"rbac_findings"`
-				PodSecFindings  []analysis.PodSecurityFinding   `json:"pod_security_findings"`
-				NetPolFindings  []analysis.NetworkPolicyFinding `json:"network_policy_findings"`
-				CloudFindings   []analysis.CloudIAMFinding      `json:"cloud_findings"`
-			}{
-				Timestamp:      time.Now().UTC().Format(time.RFC3339),
-				RBACFindings:   rbacResult.Findings,
-				PodSecFindings: podSecResult.Findings,
-				NetPolFindings: netPolResult.Findings,
-				CloudFindings:  cloudFindings,
-			}
-
-			var w *os.File
-			if outputFile != "" {
-				var err error
-				w, err = os.Create(outputFile)
-				if err != nil {
-					return fmt.Errorf("failed to create output file: %w", err)
-				}
-				defer w.Close()
-			} else {
-				w = os.Stdout
-			}
-
-			encoder := json.NewEncoder(w)
-			encoder.SetIndent("", "  ")
-			return encoder.Encode(snapshot)
+			return runSnapshotScan(outputFile)
 		},
 	}
 
 	cmd.Flags().StringVarP(&outputFile, "output-file", "f", "", "Output file path (default: stdout)")
 
+	// 'save' subcommand
+	var saveOutput string
+	saveCmd := &cobra.Command{
+		Use:   "save",
+		Short: "Save a snapshot of current security findings",
+		Long: `Save a JSON snapshot of all current security findings as a known-good baseline.
+
+Examples:
+  idc snapshot save -A --output baseline.json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSnapshotScan(saveOutput)
+		},
+	}
+	saveCmd.Flags().StringVar(&saveOutput, "output", "", "Output file path (default: stdout)")
+	cmd.AddCommand(saveCmd)
+
 	return cmd
+}
+
+func printDiffResult(result *analysis.DiffResult) {
+	fmt.Printf("Security Posture Comparison\n")
+	fmt.Printf("===========================\n\n")
+	fmt.Printf("Status: %s\n\n", strings.ToUpper(result.Summary.Status))
+	fmt.Printf("Baseline: %d findings\n", result.Summary.BaselineTotal)
+	fmt.Printf("Current:  %d findings\n\n", result.Summary.CurrentTotal)
+
+	if len(result.NewFindings) > 0 {
+		fmt.Printf("NEW FINDINGS (%d):\n", len(result.NewFindings))
+		fmt.Printf("-----------------\n")
+		for _, f := range result.NewFindings {
+			fmt.Printf("  [%s] %s - %s\n", f.Severity, f.CheckID, f.Title)
+			if f.Namespace != "" {
+				fmt.Printf("         Namespace: %s, Resource: %s\n", f.Namespace, f.Resource)
+			} else if f.Resource != "" {
+				fmt.Printf("         Resource: %s\n", f.Resource)
+			}
+		}
+		fmt.Println()
+	}
+
+	if len(result.ResolvedFindings) > 0 {
+		fmt.Printf("RESOLVED FINDINGS (%d):\n", len(result.ResolvedFindings))
+		fmt.Printf("----------------------\n")
+		for _, f := range result.ResolvedFindings {
+			fmt.Printf("  [%s] %s - %s\n", f.Severity, f.CheckID, f.Title)
+			if f.Namespace != "" {
+				fmt.Printf("         Namespace: %s, Resource: %s\n", f.Namespace, f.Resource)
+			} else if f.Resource != "" {
+				fmt.Printf("         Resource: %s\n", f.Resource)
+			}
+		}
+		fmt.Println()
+	}
+
+	fmt.Printf("Unchanged: %d findings\n", result.UnchangedCount)
 }
 
 func diffCmd() *cobra.Command {
 	var baselineFile string
+	var fromFile string
+	var toFile string
 
 	cmd := &cobra.Command{
 		Use:   "diff",
 		Short: "Compare current findings against a baseline snapshot",
-		Long: `Compare the current security state against a previously saved baseline.
+		Long: `Compare the current security state against a previously saved baseline,
+or compare two snapshot files offline.
 Shows new findings, resolved findings, and overall trend.
 
 Examples:
   idc diff -A --baseline baseline.json
-  idc diff -A --baseline before.json -o json`,
+  idc diff -A --baseline before.json -o json
+  idc diff --from baseline.json --to current.json
+  idc diff --from baseline.json --to current.json -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Offline mode: compare two files
+			if fromFile != "" && toFile != "" {
+				fromFindings, err := analysis.LoadScanFindings(fromFile)
+				if err != nil {
+					return fmt.Errorf("failed to load --from file: %w", err)
+				}
+
+				toFindings, err := analysis.LoadScanFindings(toFile)
+				if err != nil {
+					return fmt.Errorf("failed to load --to file: %w", err)
+				}
+
+				result := analysis.ComputeDiff(fromFindings, toFindings)
+
+				if outputFormat == "json" {
+					encoder := json.NewEncoder(os.Stdout)
+					encoder.SetIndent("", "  ")
+					return encoder.Encode(result)
+				}
+
+				printDiffResult(result)
+				return nil
+			}
+
+			if fromFile != "" || toFile != "" {
+				return fmt.Errorf("both --from and --to are required for offline comparison")
+			}
+
 			if baselineFile == "" {
-				return fmt.Errorf("--baseline is required")
+				return fmt.Errorf("--baseline is required (or use --from and --to for offline comparison)")
 			}
 
-			baselineData, err := os.ReadFile(baselineFile)
+			baselineFindings, err := analysis.LoadScanFindings(baselineFile)
 			if err != nil {
-				return fmt.Errorf("failed to read baseline file: %w", err)
-			}
-
-			var baseline struct {
-				RBACFindings   []analysis.RBACFinding          `json:"rbac_findings"`
-				PodSecFindings []analysis.PodSecurityFinding   `json:"pod_security_findings"`
-				NetPolFindings []analysis.NetworkPolicyFinding `json:"network_policy_findings"`
-				CloudFindings  []analysis.CloudIAMFinding      `json:"cloud_findings"`
-			}
-			if err := json.Unmarshal(baselineData, &baseline); err != nil {
-				return fmt.Errorf("failed to parse baseline: %w", err)
+				return fmt.Errorf("failed to load baseline: %w", err)
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -2988,13 +3069,6 @@ Examples:
 			if includeCloud {
 				cloudResult := analysis.AnalyzeCloudIAM(g)
 				cloudFindings = cloudResult.Findings
-			}
-
-			baselineFindings := &analysis.ScanFindings{
-				RBACFindings:   baseline.RBACFindings,
-				PodSecFindings: baseline.PodSecFindings,
-				NetPolFindings: baseline.NetPolFindings,
-				CloudFindings:  baseline.CloudFindings,
 			}
 
 			currentFindings := &analysis.ScanFindings{
@@ -3012,47 +3086,14 @@ Examples:
 				return encoder.Encode(result)
 			}
 
-			fmt.Printf("Security Posture Comparison\n")
-			fmt.Printf("===========================\n\n")
-			fmt.Printf("Status: %s\n\n", strings.ToUpper(result.Summary.Status))
-			fmt.Printf("Baseline: %d findings\n", result.Summary.BaselineTotal)
-			fmt.Printf("Current:  %d findings\n\n", result.Summary.CurrentTotal)
-
-			if len(result.NewFindings) > 0 {
-				fmt.Printf("NEW FINDINGS (%d):\n", len(result.NewFindings))
-				fmt.Printf("-----------------\n")
-				for _, f := range result.NewFindings {
-					fmt.Printf("  [%s] %s - %s\n", f.Severity, f.CheckID, f.Title)
-					if f.Namespace != "" {
-						fmt.Printf("         Namespace: %s, Resource: %s\n", f.Namespace, f.Resource)
-					} else if f.Resource != "" {
-						fmt.Printf("         Resource: %s\n", f.Resource)
-					}
-				}
-				fmt.Println()
-			}
-
-			if len(result.ResolvedFindings) > 0 {
-				fmt.Printf("RESOLVED FINDINGS (%d):\n", len(result.ResolvedFindings))
-				fmt.Printf("----------------------\n")
-				for _, f := range result.ResolvedFindings {
-					fmt.Printf("  [%s] %s - %s\n", f.Severity, f.CheckID, f.Title)
-					if f.Namespace != "" {
-						fmt.Printf("         Namespace: %s, Resource: %s\n", f.Namespace, f.Resource)
-					} else if f.Resource != "" {
-						fmt.Printf("         Resource: %s\n", f.Resource)
-					}
-				}
-				fmt.Println()
-			}
-
-			fmt.Printf("Unchanged: %d findings\n", result.UnchangedCount)
-
+			printDiffResult(result)
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&baselineFile, "baseline", "", "Baseline snapshot file to compare against (required)")
+	cmd.Flags().StringVar(&baselineFile, "baseline", "", "Baseline snapshot file to compare against live cluster")
+	cmd.Flags().StringVar(&fromFile, "from", "", "Source snapshot file for offline comparison")
+	cmd.Flags().StringVar(&toFile, "to", "", "Target snapshot file for offline comparison")
 
 	return cmd
 }

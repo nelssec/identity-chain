@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/nelssec/identity-chain/pkg/analysis"
 )
 
 type WebhookNotifier struct {
@@ -91,6 +93,70 @@ func (w *WebhookNotifier) Send(findings []FindingChange) {
 	} else {
 		fmt.Fprintf(os.Stderr, "Webhook sent: %d new findings (critical=%d, high=%d)\n",
 			summary.NewFindings, summary.CriticalCount, summary.HighCount)
+	}
+}
+
+// DriftWebhookPayload is the webhook payload for drift detection events.
+type DriftWebhookPayload struct {
+	Timestamp time.Time              `json:"timestamp"`
+	Event     string                 `json:"event"`
+	Diff      *analysis.DiffResult   `json:"diff"`
+	Summary   DriftWebhookSummary    `json:"summary"`
+}
+
+// DriftWebhookSummary has high-level drift stats for the webhook.
+type DriftWebhookSummary struct {
+	Status        string `json:"status"`
+	NewCount      int    `json:"new_count"`
+	ResolvedCount int    `json:"resolved_count"`
+}
+
+// SendDrift sends a drift_detected webhook event.
+func (w *WebhookNotifier) SendDrift(diff *analysis.DiffResult) {
+	if diff == nil {
+		return
+	}
+
+	payload := DriftWebhookPayload{
+		Timestamp: time.Now(),
+		Event:     "drift_detected",
+		Diff:      diff,
+		Summary: DriftWebhookSummary{
+			Status:        diff.Summary.Status,
+			NewCount:      diff.Summary.NewCount,
+			ResolvedCount: diff.Summary.ResolvedCount,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: Failed to marshal drift webhook payload: %v\n", err)
+		return
+	}
+
+	req, err := http.NewRequest("POST", w.url, bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: Failed to create drift webhook request: %v\n", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range w.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := w.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: Failed to send drift webhook: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		fmt.Fprintf(os.Stderr, "WARNING: Drift webhook returned status %d\n", resp.StatusCode)
+	} else {
+		fmt.Fprintf(os.Stderr, "Drift webhook sent: status=%s new=%d resolved=%d\n",
+			diff.Summary.Status, diff.Summary.NewCount, diff.Summary.ResolvedCount)
 	}
 }
 

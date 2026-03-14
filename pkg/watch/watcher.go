@@ -36,6 +36,9 @@ type Config struct {
 	MetricsAddr    string
 	WebhookURL     string
 	WebhookHeaders map[string]string
+	BaselineFile   string
+	AlertOnDrift   bool
+	DriftOnly      bool
 }
 
 type Watcher struct {
@@ -47,6 +50,7 @@ type Watcher struct {
 	webhook    *WebhookNotifier
 	mu         sync.Mutex
 	lastState  *WatchState
+	baseline   *analysis.ScanFindings
 	debouncer  *debouncer
 	opts       collector.Options
 }
@@ -140,6 +144,14 @@ func New(config Config) (*Watcher, error) {
 		w.webhook = NewWebhookNotifier(config.WebhookURL, config.WebhookHeaders)
 	}
 
+	if config.BaselineFile != "" {
+		baseline, err := analysis.LoadScanFindings(config.BaselineFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load baseline: %w", err)
+		}
+		w.baseline = baseline
+	}
+
 	w.debouncer = newDebouncer(config.DebouncePeriod, w.analyze)
 
 	return w, nil
@@ -158,6 +170,10 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 	if w.config.WebhookURL != "" {
 		fmt.Fprintf(os.Stderr, "  Webhook: %s\n", w.config.WebhookURL)
+	}
+	if w.baseline != nil {
+		fmt.Fprintf(os.Stderr, "  Baseline: %s (alert-on-drift=%v, drift-only=%v)\n",
+			w.config.BaselineFile, w.config.AlertOnDrift, w.config.DriftOnly)
 	}
 
 	if err := w.setupInformers(); err != nil {
@@ -398,7 +414,49 @@ func (w *Watcher) analyze() {
 		}
 	}
 
+	// Baseline drift detection
+	if w.baseline != nil {
+		currentFindings := &analysis.ScanFindings{
+			RBACFindings:   newState.RBACFindings,
+			PodSecFindings: newState.PodSecFindings,
+			NetPolFindings: newState.NetPolFindings,
+		}
+		diff := analysis.ComputeDiff(w.baseline, currentFindings)
+
+		if diff.Summary.Status != "unchanged" {
+			if w.config.AlertOnDrift || w.config.DriftOnly {
+				fmt.Fprintf(os.Stderr, "DRIFT DETECTED: status=%s new=%d resolved=%d unchanged=%d\n",
+					diff.Summary.Status, diff.Summary.NewCount, diff.Summary.ResolvedCount, diff.UnchangedCount)
+				for _, f := range diff.NewFindings {
+					fmt.Fprintf(os.Stderr, "  + [%s] %s - %s", f.Severity, f.CheckID, f.Title)
+					if f.Namespace != "" {
+						fmt.Fprintf(os.Stderr, " (%s/%s)", f.Namespace, f.Resource)
+					}
+					fmt.Fprintln(os.Stderr)
+				}
+				for _, f := range diff.ResolvedFindings {
+					fmt.Fprintf(os.Stderr, "  - [%s] %s - %s", f.Severity, f.CheckID, f.Title)
+					if f.Namespace != "" {
+						fmt.Fprintf(os.Stderr, " (%s/%s)", f.Namespace, f.Resource)
+					}
+					fmt.Fprintln(os.Stderr)
+				}
+			}
+
+			if w.webhook != nil {
+				w.webhook.SendDrift(diff)
+			}
+		}
+	}
+
 	elapsed := time.Since(start)
+
+	if w.config.DriftOnly && w.baseline != nil {
+		// In drift-only mode, skip the normal analysis output unless there's drift
+		w.lastState = newState
+		return
+	}
+
 	fmt.Fprintf(os.Stderr, "[%s] Analysis complete in %v: %d findings (critical=%d, high=%d, medium=%d, low=%d)\n",
 		newState.Timestamp.Format("15:04:05"),
 		elapsed.Round(time.Millisecond),
