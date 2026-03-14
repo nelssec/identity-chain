@@ -3,10 +3,16 @@ package output
 import (
 	"encoding/json"
 	"io"
+	"time"
 
 	"github.com/nelssec/identity-chain/pkg/analysis"
 	"github.com/nelssec/identity-chain/pkg/graph"
 )
+
+// JSONOptions configures JSON output behavior.
+type JSONOptions struct {
+	Compact bool // If true, no indentation
+}
 
 type JSONWriter struct {
 	w       io.Writer
@@ -14,16 +20,37 @@ type JSONWriter struct {
 }
 
 func NewJSONWriter(w io.Writer) *JSONWriter {
+	return NewJSONWriterWithOptions(w, JSONOptions{})
+}
+
+func NewJSONWriterWithOptions(w io.Writer, opts JSONOptions) *JSONWriter {
 	encoder := json.NewEncoder(w)
-	encoder.SetIndent("", "  ")
+	if !opts.Compact {
+		encoder.SetIndent("", "  ")
+	}
 	return &JSONWriter{
 		w:       w,
 		encoder: encoder,
 	}
 }
 
+// scanEnvelope wraps any result payload with scan metadata.
+type scanEnvelope struct {
+	Version   string      `json:"version"`
+	Timestamp string      `json:"timestamp"`
+	Findings  interface{} `json:"findings"`
+}
+
+func newEnvelope(findings interface{}) scanEnvelope {
+	return scanEnvelope{
+		Version:   "0.3.1",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Findings:  findings,
+	}
+}
+
 func (j *JSONWriter) WriteBlastResult(result *analysis.BlastResult) error {
-	return j.encoder.Encode(convertBlastResult(result))
+	return j.encoder.Encode(newEnvelope(convertBlastResult(result)))
 }
 
 func (j *JSONWriter) WriteBlastResults(results []*analysis.BlastResult) error {
@@ -31,7 +58,7 @@ func (j *JSONWriter) WriteBlastResults(results []*analysis.BlastResult) error {
 	for _, r := range results {
 		output = append(output, convertBlastResult(r))
 	}
-	return j.encoder.Encode(output)
+	return j.encoder.Encode(newEnvelope(output))
 }
 
 func (j *JSONWriter) WriteGraph(g *graph.Graph) error {
@@ -40,39 +67,39 @@ func (j *JSONWriter) WriteGraph(g *graph.Graph) error {
 		Edges: g.AllEdges(),
 		Stats: g.Stats(),
 	}
-	return j.encoder.Encode(output)
+	return j.encoder.Encode(newEnvelope(output))
 }
 
 func (j *JSONWriter) WriteStats(stats graph.GraphStats) error {
-	return j.encoder.Encode(stats)
+	return j.encoder.Encode(newEnvelope(stats))
 }
 
 func (j *JSONWriter) WritePrivescResults(results []*analysis.PrivescResult) error {
-	return j.encoder.Encode(results)
+	return j.encoder.Encode(newEnvelope(results))
 }
 
 func (j *JSONWriter) WriteWhoCanResult(result *analysis.WhoCanResult) error {
-	return j.encoder.Encode(result)
+	return j.encoder.Encode(newEnvelope(result))
 }
 
 func (j *JSONWriter) WriteWhatCanResult(result *analysis.ReverseRBACResult) error {
-	return j.encoder.Encode(result)
+	return j.encoder.Encode(newEnvelope(result))
 }
 
 func (j *JSONWriter) WriteRBACAuditResult(result *analysis.RBACAuditResult) error {
-	return j.encoder.Encode(result)
+	return j.encoder.Encode(newEnvelope(result))
 }
 
 func (j *JSONWriter) WriteCloudAuditResult(result *analysis.CloudIAMAuditResult) error {
-	return j.encoder.Encode(result)
+	return j.encoder.Encode(newEnvelope(result))
 }
 
 func (j *JSONWriter) WritePodSecurityResult(result *analysis.PodSecurityResult) error {
-	return j.encoder.Encode(result)
+	return j.encoder.Encode(newEnvelope(result))
 }
 
 func (j *JSONWriter) WriteNetworkPolicyResult(result *analysis.NetworkPolicyResult) error {
-	return j.encoder.Encode(result)
+	return j.encoder.Encode(newEnvelope(result))
 }
 
 func (j *JSONWriter) WriteAttackPathResults(results []*analysis.AttackPathResult) error {
@@ -83,18 +110,18 @@ func (j *JSONWriter) WriteAttackPathResults(results []*analysis.AttackPathResult
 		Results: results,
 		Summary: analysis.SummarizeAttackPaths(results),
 	}
-	return j.encoder.Encode(output)
+	return j.encoder.Encode(newEnvelope(output))
 }
 
 type blastResultJSON struct {
-	Workload        *nodeRef          `json:"workload,omitempty"`
-	ServiceAccount  *nodeRef          `json:"service_account,omitempty"`
-	K8sResources    []resourceJSON    `json:"k8s_resources,omitempty"`
-	CloudRoles      []cloudRoleJSON   `json:"cloud_roles,omitempty"`
-	BlastRadius     []string          `json:"blast_radius,omitempty"`
-	TotalK8sPerms   int               `json:"total_k8s_permissions"`
-	TotalCloudPerms int               `json:"total_cloud_permissions"`
-	MaxSeverity     graph.Severity    `json:"max_severity"`
+	Workload        *nodeRef        `json:"workload,omitempty"`
+	ServiceAccount  *nodeRef        `json:"service_account,omitempty"`
+	K8sResources    []resourceJSON  `json:"k8s_resources,omitempty"`
+	CloudRoles      []cloudRoleJSON `json:"cloud_roles,omitempty"`
+	BlastRadius     []string        `json:"blast_radius,omitempty"`
+	TotalK8sPerms   int             `json:"total_k8s_permissions"`
+	TotalCloudPerms int             `json:"total_cloud_permissions"`
+	MaxSeverity     graph.Severity  `json:"max_severity"`
 }
 
 type nodeRef struct {
@@ -127,9 +154,9 @@ type cloudPolicyJSON struct {
 }
 
 type graphJSON struct {
-	Nodes []*graph.Node     `json:"nodes"`
-	Edges []*graph.Edge     `json:"edges"`
-	Stats graph.GraphStats  `json:"stats"`
+	Nodes []*graph.Node    `json:"nodes"`
+	Edges []*graph.Edge    `json:"edges"`
+	Stats graph.GraphStats `json:"stats"`
 }
 
 func convertBlastResult(r *analysis.BlastResult) blastResultJSON {
