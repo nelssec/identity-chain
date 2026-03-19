@@ -2015,10 +2015,11 @@ Dry-run workflow:
 				result = remediation.FilterByNamespace(result, namespace)
 			}
 
-			yamlOnly := manifestsOnly || dryRun || outputFormat == "yaml"
+			yamlOnly := dryRun || outputFormat == "yaml"
 
 			if apply {
-				fmt.Fprintln(os.Stderr, "The following manifests will be applied to your cluster:\n")
+				fmt.Fprintln(os.Stderr, "The following manifests will be applied to your cluster:")
+				fmt.Fprintln(os.Stderr)
 				fmt.Fprint(os.Stderr, result.CombinedManifests)
 				fmt.Fprintln(os.Stderr)
 				fmt.Fprint(os.Stderr, "Continue? [y/N] ")
@@ -2049,7 +2050,7 @@ Dry-run workflow:
 				out = os.Stdout
 			}
 
-			if dryRun || outputFormat == "yaml" {
+			if yamlOnly {
 				yaml := result.GenerateDryRunYAML()
 				if yaml == "" {
 					fmt.Fprintln(os.Stderr, "No actionable manifests to output.")
