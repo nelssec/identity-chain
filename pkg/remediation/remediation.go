@@ -74,7 +74,7 @@ func (rr *RemediationResult) GenerateCombinedManifests() string {
 				combined += "---\n"
 			}
 			combined += fmt.Sprintf("# idc: %s %s\n", r.FindingID, r.Severity)
-			combined += fmt.Sprintf("# action: %s | %s\n", m.Action, m.Description)
+			combined += fmt.Sprintf("# Action: %s\n", m.Description)
 			combined += m.YAML + "\n"
 		}
 	}
