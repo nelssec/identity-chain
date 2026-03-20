@@ -62,15 +62,15 @@ var (
 func severityColor(s graph.Severity) string {
 	switch s {
 	case graph.SeverityCritical:
-		return criticalColor.Sprint(string(s))
+		return "\033[31m" + string(s) + "\033[0m"
 	case graph.SeverityHigh:
-		return highColor.Sprint(string(s))
+		return "\033[33m" + string(s) + "\033[0m"
 	case graph.SeverityMedium:
-		return mediumColor.Sprint(string(s))
+		return "\033[36m" + string(s) + "\033[0m"
 	case graph.SeverityLow:
-		return lowColor.Sprint(string(s))
+		return string(s)
 	default:
-		return infoColor.Sprint(string(s))
+		return string(s)
 	}
 }
 
@@ -479,15 +479,6 @@ func (t *TableWriter) WriteRBACAuditResult(result *analysis.RBACAuditResult) err
 		return nil
 	}
 
-	if !t.verbose {
-		fmt.Fprintf(t.w, "\n%s\n\n", headerColor.Sprint("=== Findings (use -v for details) ==="))
-		for _, f := range result.Findings {
-			fmt.Fprintf(t.w, "  [%s] %s — %s\n", severityColorStr(string(f.Severity)), f.CheckID, f.Title)
-		}
-		fmt.Fprintln(t.w)
-		return nil
-	}
-
 	fmt.Fprintf(t.w, "\n%s\n\n", headerColor.Sprint("=== Findings ==="))
 
 	currentSeverity := ""
@@ -503,14 +494,16 @@ func (t *TableWriter) WriteRBACAuditResult(result *analysis.RBACAuditResult) err
 		if len(f.Affected) > 0 {
 			fmt.Fprintf(t.w, "   Affected (%d):\n", len(f.Affected))
 			limit := 5
-			if len(f.Affected) < limit {
+			if t.verbose {
+				limit = len(f.Affected)
+			} else if len(f.Affected) < limit {
 				limit = len(f.Affected)
 			}
 			for i := 0; i < limit; i++ {
 				a := f.Affected[i]
 				fmt.Fprintf(t.w, "     - %s/%s: %s\n", a.Namespace, a.Name, a.Details)
 			}
-			if len(f.Affected) > 5 {
+			if !t.verbose && len(f.Affected) > 5 {
 				fmt.Fprintf(t.w, "     ... and %d more\n", len(f.Affected)-5)
 			}
 		}
@@ -609,15 +602,6 @@ func (t *TableWriter) WritePodSecurityResult(result *analysis.PodSecurityResult)
 		return nil
 	}
 
-	if !t.verbose {
-		fmt.Fprintf(t.w, "\n%s\n\n", headerColor.Sprint("=== Findings (use -v for details) ==="))
-		for _, f := range result.Findings {
-			fmt.Fprintf(t.w, "  [%s] %s — %s\n", severityColorStr(string(f.Severity)), f.CheckID, f.Title)
-		}
-		fmt.Fprintln(t.w)
-		return nil
-	}
-
 	fmt.Fprintf(t.w, "\n%s\n\n", headerColor.Sprint("=== Findings ==="))
 
 	currentSeverity := ""
@@ -633,7 +617,9 @@ func (t *TableWriter) WritePodSecurityResult(result *analysis.PodSecurityResult)
 		if len(f.Affected) > 0 {
 			fmt.Fprintf(t.w, "   Affected (%d):\n", len(f.Affected))
 			limit := 5
-			if len(f.Affected) < limit {
+			if t.verbose {
+				limit = len(f.Affected)
+			} else if len(f.Affected) < limit {
 				limit = len(f.Affected)
 			}
 			for i := 0; i < limit; i++ {
@@ -644,7 +630,7 @@ func (t *TableWriter) WritePodSecurityResult(result *analysis.PodSecurityResult)
 				}
 				fmt.Fprintf(t.w, "     - %s %s/%s%s: %s\n", a.Kind, a.Namespace, a.Name, container, a.Details)
 			}
-			if len(f.Affected) > 5 {
+			if !t.verbose && len(f.Affected) > 5 {
 				fmt.Fprintf(t.w, "     ... and %d more\n", len(f.Affected)-5)
 			}
 		}
@@ -684,15 +670,6 @@ func (t *TableWriter) WriteNetworkPolicyResult(result *analysis.NetworkPolicyRes
 		return nil
 	}
 
-	if !t.verbose {
-		fmt.Fprintf(t.w, "\n%s\n\n", headerColor.Sprint("=== Findings (use -v for details) ==="))
-		for _, f := range result.Findings {
-			fmt.Fprintf(t.w, "  [%s] %s — %s\n", severityColorStr(string(f.Severity)), f.CheckID, f.Title)
-		}
-		fmt.Fprintln(t.w)
-		return nil
-	}
-
 	fmt.Fprintf(t.w, "\n%s\n\n", headerColor.Sprint("=== Findings ==="))
 
 	currentSeverity := ""
@@ -708,7 +685,9 @@ func (t *TableWriter) WriteNetworkPolicyResult(result *analysis.NetworkPolicyRes
 		if len(f.Affected) > 0 {
 			fmt.Fprintf(t.w, "   Affected (%d):\n", len(f.Affected))
 			limit := 5
-			if len(f.Affected) < limit {
+			if t.verbose {
+				limit = len(f.Affected)
+			} else if len(f.Affected) < limit {
 				limit = len(f.Affected)
 			}
 			for i := 0; i < limit; i++ {
@@ -719,7 +698,7 @@ func (t *TableWriter) WriteNetworkPolicyResult(result *analysis.NetworkPolicyRes
 				}
 				fmt.Fprintf(t.w, "     - %s %s/%s: %s%s\n", a.Kind, a.Namespace, a.Name, a.Details, services)
 			}
-			if len(f.Affected) > 5 {
+			if !t.verbose && len(f.Affected) > 5 {
 				fmt.Fprintf(t.w, "     ... and %d more\n", len(f.Affected)-5)
 			}
 		}
