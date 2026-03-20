@@ -50,7 +50,7 @@ func newEnvelope(findings interface{}) scanEnvelope {
 }
 
 func (j *JSONWriter) WriteBlastResult(result *analysis.BlastResult) error {
-	return j.encoder.Encode(newEnvelope(convertBlastResult(result)))
+	return j.encoder.Encode(convertBlastResult(result))
 }
 
 func (j *JSONWriter) WriteBlastResults(results []*analysis.BlastResult) error {
@@ -58,7 +58,7 @@ func (j *JSONWriter) WriteBlastResults(results []*analysis.BlastResult) error {
 	for _, r := range results {
 		output = append(output, convertBlastResult(r))
 	}
-	return j.encoder.Encode(newEnvelope(output))
+	return j.encoder.Encode(output)
 }
 
 func (j *JSONWriter) WriteGraph(g *graph.Graph) error {
@@ -67,11 +67,11 @@ func (j *JSONWriter) WriteGraph(g *graph.Graph) error {
 		Edges: g.AllEdges(),
 		Stats: g.Stats(),
 	}
-	return j.encoder.Encode(newEnvelope(output))
+	return j.encoder.Encode(output)
 }
 
 func (j *JSONWriter) WriteStats(stats graph.GraphStats) error {
-	return j.encoder.Encode(newEnvelope(stats))
+	return j.encoder.Encode(stats)
 }
 
 func (j *JSONWriter) WritePrivescResults(results []*analysis.PrivescResult) error {
